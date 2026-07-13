@@ -5,6 +5,7 @@
  */
 
 import assert from 'node:assert';
+import {spawnSync} from 'node:child_process';
 import {describe, it} from 'node:test';
 
 import {parseArguments} from '../src/bin/chrome-devtools-mcp-cli-options.js';
@@ -29,6 +30,10 @@ describe('cli args parsing', () => {
     usageStatistics: true,
     'redact-network-headers': false,
     redactNetworkHeaders: false,
+    'browser-transport': 'pipe',
+    browserTransport: 'pipe',
+    'scriptcat-timeout': 15000,
+    scriptcatTimeout: 15000,
   };
 
   it('parses with default args', async () => {
@@ -74,6 +79,42 @@ describe('cli args parsing', () => {
       'user-data-dir': '/tmp/chrome-profile',
       userDataDir: '/tmp/chrome-profile',
     });
+  });
+
+  it('enables managed ScriptCat with a complete configuration', () => {
+    const args = parseArguments(
+      '1.0.0',
+      [
+        'node',
+        'main.js',
+        '--executable-path=/opt/chrome/chrome',
+        '--user-data-dir=/tmp/scriptcat-profile',
+        '--managed-scriptcat-path=/opt/scriptcat',
+        '--scriptcat-repository-root=/work/scriptcat',
+        '--scriptcat-extension-id=ckchkcgpbkhleahkgkbiiikpcjdbopje',
+      ],
+      {},
+    );
+    assert.strictEqual(args.categoryExtensions, true);
+    assert.strictEqual(args.browserTransport, 'pipe');
+    assert.strictEqual(args.managedScriptcatPath, '/opt/scriptcat');
+    assert.strictEqual(args.scriptcatRepositoryRoot, '/work/scriptcat');
+  });
+
+  it('rejects an incomplete managed ScriptCat configuration', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        'build/src/bin/chrome-devtools-mcp.js',
+        '--managed-scriptcat-path=/opt/scriptcat',
+      ],
+      {encoding: 'utf8'},
+    );
+    assert.strictEqual(result.status, 1);
+    assert.match(
+      result.stderr,
+      /managed-scriptcat-path.*must be provided together/,
+    );
   });
 
   it('parses an empty browser url', async () => {
