@@ -13,6 +13,7 @@ import {loadIssueDescriptions} from './issue-descriptions.js';
 import {logger} from './logger.js';
 import {McpContext} from './McpContext.js';
 import {Mutex} from './Mutex.js';
+import {ScriptCatManager} from './ScriptCatManager.js';
 import {ClearcutLogger} from './telemetry/ClearcutLogger.js';
 import {FilePersistence} from './telemetry/persistence.js';
 import {
@@ -90,6 +91,8 @@ export async function createMcpServer(
   };
 
   let context: McpContext;
+  let scriptCat: ScriptCatManager | undefined;
+  let scriptCatBrowser: object | undefined;
   async function getContext(): Promise<McpContext> {
     const chromeArgs: string[] = (serverArgs.chromeArg ?? []).map(String);
     const ignoreDefaultChromeArgs: string[] = (
@@ -137,15 +140,32 @@ export async function createMcpServer(
             viaCli: serverArgs.viaCli,
             blocklist,
             allowlist,
+            profileLock: Boolean(serverArgs.managedScriptcatPath),
           });
 
     if (context?.browser !== browser) {
+      if (
+        serverArgs.managedScriptcatPath &&
+        serverArgs.scriptcatRepositoryRoot &&
+        serverArgs.scriptcatExtensionId &&
+        scriptCatBrowser !== browser
+      ) {
+        scriptCat = await ScriptCatManager.create(browser, {
+          extensionPath: serverArgs.managedScriptcatPath,
+          extensionId: serverArgs.scriptcatExtensionId,
+          repositoryRoot: serverArgs.scriptcatRepositoryRoot,
+          timeout: serverArgs.scriptcatTimeout,
+        });
+        await scriptCat.initialize();
+        scriptCatBrowser = browser;
+      }
       context = await McpContext.from(browser, logger, {
         experimentalDevToolsDebugging: devtools,
         experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
         performanceCrux: serverArgs.performanceCrux,
         allowList: allowlist,
         blocklist: blocklist,
+        scriptCat,
       });
       await updateRoots();
     }

@@ -12,6 +12,12 @@ import type {
   DuplicateStringGroup,
 } from '../HeapSnapshotManager.js';
 import type {McpPage} from '../McpPage.js';
+import type {
+  ScriptCatScript,
+  ScriptCatScriptSummary,
+  ScriptCatStatus,
+  ScriptCatUpsertResult,
+} from '../ScriptCatManager.js';
 import {zod} from '../third_party/index.js';
 import type {
   Dialog,
@@ -250,6 +256,20 @@ export type Context = Readonly<{
   triggerExtensionAction(id: string): Promise<void>;
   listExtensions(): Promise<Map<string, Extension>>;
   getExtension(id: string): Promise<Extension | undefined>;
+  setExtensionUserScriptsAccess(id: string, enabled: boolean): Promise<void>;
+  scriptCatStatus(): Promise<ScriptCatStatus>;
+  scriptCatListScripts(enabled?: boolean): Promise<ScriptCatScriptSummary[]>;
+  scriptCatGetScript(id: string): Promise<ScriptCatScript>;
+  scriptCatUpsertScript(options: {
+    filePath: string;
+    id?: string;
+    enabled?: boolean;
+  }): Promise<ScriptCatUpsertResult>;
+  scriptCatDeleteScript(id: string): Promise<{id: string; deleted: true}>;
+  scriptCatSetEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<{id: string; enabled: boolean}>;
   getSelectedMcpPage(): McpPage;
   getExtensionServiceWorkers(): ExtensionServiceWorker[];
   getExtensionServiceWorkerId(

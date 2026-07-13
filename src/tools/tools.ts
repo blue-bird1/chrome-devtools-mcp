@@ -18,6 +18,7 @@ import * as performanceTools from './performance.js';
 import * as screencastTools from './screencast.js';
 import * as screenshotTools from './screenshot.js';
 import * as scriptTools from './script.js';
+import * as scriptCatTools from './scriptcat.js';
 import * as slimTools from './slim/tools.js';
 import * as snapshotTools from './snapshot.js';
 import * as thirdPartyDeveloperTools from './thirdPartyDeveloper.js';
@@ -40,6 +41,7 @@ export const createTools = (args: ParsedArguments) => {
         ...Object.values(screencastTools),
         ...Object.values(screenshotTools),
         ...Object.values(scriptTools),
+        ...Object.values(scriptCatTools),
         ...Object.values(snapshotTools),
         ...Object.values(thirdPartyDeveloperTools),
         ...Object.values(webmcpTools),

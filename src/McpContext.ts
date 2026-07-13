@@ -29,6 +29,14 @@ import {
   type ListenerMap,
   type UncaughtError,
 } from './PageCollector.js';
+import {setExtensionUserScriptsAccess} from './ScriptCatManager.js';
+import type {
+  ScriptCatManager,
+  ScriptCatScript,
+  ScriptCatScriptSummary,
+  ScriptCatStatus,
+  ScriptCatUpsertResult,
+} from './ScriptCatManager.js';
 import {ServiceWorkerConsoleCollector} from './ServiceWorkerCollector.js';
 import {
   Locator,
@@ -69,6 +77,7 @@ interface McpContextOptions {
   allowList?: string[];
   // The block list of URL patterns to block loading resources.
   blocklist?: string[];
+  scriptCat?: ScriptCatManager;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -109,6 +118,7 @@ export class McpContext implements Context {
   #options: McpContextOptions;
   #heapSnapshotManager = new HeapSnapshotManager();
   #roots: Root[] | undefined = undefined;
+  #scriptCat?: ScriptCatManager;
 
   private constructor(
     browser: Browser,
@@ -126,6 +136,7 @@ export class McpContext implements Context {
     this.logger = logger;
     this.#locatorClass = locatorClass;
     this.#options = options;
+    this.#scriptCat = options.scriptCat;
 
     this.#networkCollector = new NetworkCollector(this.browser);
 
@@ -907,6 +918,51 @@ export class McpContext implements Context {
   async getExtension(id: string): Promise<Extension | undefined> {
     const pptrExtensions = await this.browser.extensions();
     return pptrExtensions.get(id);
+  }
+
+  async setExtensionUserScriptsAccess(
+    id: string,
+    enabled: boolean,
+  ): Promise<void> {
+    await setExtensionUserScriptsAccess(this.browser, id, enabled);
+  }
+
+  scriptCatStatus(): Promise<ScriptCatStatus> {
+    return this.#getScriptCat().status();
+  }
+
+  scriptCatListScripts(enabled?: boolean): Promise<ScriptCatScriptSummary[]> {
+    return this.#getScriptCat().listScripts(enabled);
+  }
+
+  scriptCatGetScript(id: string): Promise<ScriptCatScript> {
+    return this.#getScriptCat().getScript(id);
+  }
+
+  scriptCatUpsertScript(options: {
+    filePath: string;
+    id?: string;
+    enabled?: boolean;
+  }): Promise<ScriptCatUpsertResult> {
+    return this.#getScriptCat().upsertScript(options);
+  }
+
+  scriptCatDeleteScript(id: string): Promise<{id: string; deleted: true}> {
+    return this.#getScriptCat().deleteScript(id);
+  }
+
+  scriptCatSetEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<{id: string; enabled: boolean}> {
+    return this.#getScriptCat().setEnabled(id, enabled);
+  }
+
+  #getScriptCat(): ScriptCatManager {
+    if (!this.#scriptCat) {
+      throw new Error('Managed ScriptCat is not configured.');
+    }
+    return this.#scriptCat;
   }
 
   async getHeapSnapshotAggregates(

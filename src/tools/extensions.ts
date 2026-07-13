@@ -106,3 +106,24 @@ export const triggerExtensionAction = defineTool({
     response.appendResponseLine(`Extension action triggered for ID ${id}`);
   },
 });
+
+export const setExtensionUserScriptsAccess = defineTool({
+  name: 'set_extension_user_scripts_access',
+  description:
+    'Enables or disables the userScripts API for an unpacked extension.',
+  annotations: {
+    category: ToolCategory.EXTENSIONS,
+    readOnlyHint: false,
+  },
+  schema: {
+    id: zod.string().describe('ID of the unpacked extension.'),
+    enabled: zod.boolean().describe('Whether userScripts access is enabled.'),
+  },
+  blockedByDialog: false,
+  verifyFilesSchema: [],
+  handler: async (request, response, context) => {
+    const {id, enabled} = request.params;
+    await context.setExtensionUserScriptsAccess(id, enabled);
+    response.appendResponseLine(JSON.stringify({id, enabled}, null, 2));
+  },
+});
