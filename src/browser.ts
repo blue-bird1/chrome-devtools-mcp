@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {logger} from './logger.js';
+import {acquireProfileLock, releaseProfileLock} from './ProfileLock.js';
 import type {
   Browser,
   ChromeReleaseChannel,
@@ -162,6 +163,7 @@ interface McpLaunchOptions {
   viaCli?: boolean;
   blocklist?: string[];
   allowlist?: string[];
+  profileLock?: boolean;
 }
 
 export function detectDisplay(): void {
@@ -280,11 +282,24 @@ export async function ensureBrowserLaunched(
   if (browser?.connected) {
     return browser;
   }
+  if (options.profileLock) {
+    if (!options.userDataDir) {
+      throw new Error('A user data directory is required for profile locking.');
+    }
+    await acquireProfileLock(options.userDataDir);
+  }
   // Assign mode before browser; see the connect path above for rationale.
-  const launched = await launch(options);
-  browserMode = 'launched';
-  browser = launched;
-  return browser;
+  try {
+    const launched = await launch(options);
+    browserMode = 'launched';
+    browser = launched;
+    return browser;
+  } catch (error) {
+    if (options.profileLock) {
+      await releaseProfileLock();
+    }
+    throw error;
+  }
 }
 
 /**
@@ -300,17 +315,23 @@ export async function closeBrowser(): Promise<void> {
   browser = undefined;
   browserMode = undefined;
   if (!b || !b.connected) {
+    await releaseProfileLock();
     return;
   }
   if (mode === 'launched') {
-    await b.close().catch(err => {
-      logger?.('Failed to close browser', err);
-    });
+    try {
+      await b.close().catch(err => {
+        logger?.('Failed to close browser', err);
+      });
+    } finally {
+      await releaseProfileLock();
+    }
     return;
   }
   await b.disconnect().catch(err => {
     logger?.('Failed to disconnect from browser', err);
   });
+  await releaseProfileLock();
 }
 
 export type Channel = 'stable' | 'canary' | 'beta' | 'dev';
