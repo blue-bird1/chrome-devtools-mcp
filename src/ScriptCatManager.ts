@@ -52,6 +52,7 @@ export interface ScriptCatStatus {
     path?: string;
   };
   serviceWorkerReady: boolean;
+  userScriptsAccessEnabled: boolean | null;
   backendTransportReady: boolean;
   repositoryRoot: string;
 }
@@ -197,6 +198,7 @@ export class ScriptCatManager {
         ready: false,
         extension: {id: this.#extensionId},
         serviceWorkerReady: false,
+        userScriptsAccessEnabled: null,
         backendTransportReady: false,
         repositoryRoot: this.#repositoryRoot,
       };
@@ -210,10 +212,15 @@ export class ScriptCatManager {
         serviceWorkerReady = false;
       }
     }
-    const backendTransportReady = this.#backend.transportReady();
+    const userScriptsAccessEnabled =
+      await this.#backend.userScriptsAccessEnabled();
+    const backendTransportReady = await this.#backend.transportReady();
     return {
       ready: Boolean(
-        extension?.enabled && serviceWorkerReady && backendTransportReady,
+        extension?.enabled &&
+        serviceWorkerReady &&
+        userScriptsAccessEnabled === true &&
+        backendTransportReady,
       ),
       extension: {
         id: this.#extensionId,
@@ -223,6 +230,7 @@ export class ScriptCatManager {
         path: extension?.path,
       },
       serviceWorkerReady,
+      userScriptsAccessEnabled,
       backendTransportReady,
       repositoryRoot: this.#repositoryRoot,
     };

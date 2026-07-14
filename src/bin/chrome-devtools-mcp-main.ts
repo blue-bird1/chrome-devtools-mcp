@@ -8,7 +8,7 @@ import '../polyfill.js';
 
 import process from 'node:process';
 
-import {closeBrowser} from '../browser.js';
+import {closeBrowserWithBackstop} from '../browser.js';
 import {createMcpServer, logDisclaimers} from '../index.js';
 import {logger, saveLogsToFile} from '../logger.js';
 import {ClearcutLogger} from '../telemetry/ClearcutLogger.js';
@@ -44,15 +44,9 @@ async function shutdown(reason: string): Promise<void> {
   }
   shuttingDown = true;
   logger?.(`Shutting down (${reason})`);
-  // Backstop in case browser teardown hangs (e.g. unresponsive Chrome,
-  // slow beforeunload handlers, many tabs). Exits 0 because we still
-  // honored the shutdown request; the log line preserves observability.
-  // Unref'd so it doesn't keep the loop alive on the clean path.
-  setTimeout(() => {
-    logger?.('Shutdown timeout exceeded, forcing exit');
-    process.exit(0);
-  }, 10000).unref();
-  await closeBrowser();
+  await closeBrowserWithBackstop(() => {
+    logger?.('Shutdown timeout exceeded; waiting for Chrome to exit');
+  });
   process.exit(0);
 }
 process.stdin.on('end', () => {

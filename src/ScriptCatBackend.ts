@@ -8,6 +8,11 @@ import {ManagedMcpError, type ManagedMcpErrorCode} from './ManagedMcpError.js';
 import type {Browser, Page, Target} from './third_party/index.js';
 
 const OFFSCREEN_PATH = '/src/offscreen.html';
+const TRANSPORT_PROBE_ACTION = 'serviceWorker/managed/ping';
+
+interface ManagedTransportProbeResponse {
+  managed: true;
+}
 
 interface ScriptCatMessageResponse<T> {
   code: number;
@@ -31,8 +36,50 @@ export class ScriptCatBackend {
     this.#timeout = timeout;
   }
 
-  transportReady(): boolean {
-    return Boolean(this.#findOffscreenTarget());
+  async transportReady(): Promise<boolean> {
+    try {
+      const response = await this.send<unknown>(TRANSPORT_PROBE_ACTION);
+      return isManagedTransportProbeResponse(response);
+    } catch {
+      return false;
+    }
+  }
+
+  async userScriptsAccessEnabled(): Promise<boolean | null> {
+    const target = this.#findServiceWorkerTarget();
+    if (!target) {
+      return null;
+    }
+    try {
+      const worker = await target.worker();
+      if (!worker) {
+        return null;
+      }
+      return await withTimeout(
+        worker.evaluate(async () => {
+          try {
+            const chromeApi = globalThis as unknown as {
+              chrome?: {
+                userScripts?: {
+                  getScripts(options: {ids: string[]}): Promise<unknown>;
+                };
+              };
+            };
+            const userScripts = chromeApi.chrome?.userScripts;
+            if (typeof userScripts?.getScripts !== 'function') {
+              return false;
+            }
+            return Array.isArray(await userScripts.getScripts({ids: []}));
+          } catch {
+            return false;
+          }
+        }),
+        this.#timeout,
+        'userScripts access probe',
+      );
+    } catch {
+      return null;
+    }
   }
 
   async send<T>(
@@ -41,64 +88,72 @@ export class ScriptCatBackend {
     backendErrorCode?: ManagedMcpErrorCode,
   ): Promise<T> {
     let delivery: ScriptCatDelivery<T>;
-    try {
-      const page = await this.#getOffscreenPage();
-      delivery = await withTimeout(
-        page.evaluate(
-          async payload => {
-            const runtime = (
-              globalThis as unknown as {
-                chrome: {
-                  runtime: {
-                    lastError?: {message?: string};
-                    sendMessage(
-                      message: unknown,
-                      callback: (response: unknown) => void,
-                    ): void;
+    const deadline = Date.now() + this.#timeout;
+    const attemptedTargets = new Set<Target>();
+    while (true) {
+      try {
+        const {page} = await this.#getOffscreenPage(attemptedTargets, deadline);
+        delivery = await withTimeout(
+          page.evaluate(
+            async payload => {
+              const runtime = (
+                globalThis as unknown as {
+                  chrome: {
+                    runtime: {
+                      lastError?: {message?: string};
+                      sendMessage(
+                        message: unknown,
+                        callback: (response: unknown) => void,
+                      ): void;
+                    };
                   };
-                };
-              }
-            ).chrome.runtime;
-            return await new Promise<ScriptCatDelivery<unknown>>(resolve => {
-              runtime.sendMessage(
-                {action: payload.action, data: payload.data},
-                response => {
-                  const transportError = runtime.lastError?.message;
-                  resolve(
-                    transportError
-                      ? {transportError}
-                      : {
-                          response:
-                            response as ScriptCatMessageResponse<unknown>,
-                        },
-                  );
-                },
-              );
-            });
-          },
-          {action, data},
-        ) as Promise<ScriptCatDelivery<T>>,
-        this.#timeout,
-        action,
-      );
-    } catch (error) {
-      if (error instanceof ManagedMcpError) {
-        throw error;
-      }
-      if (error instanceof Error && error.name === 'TimeoutError') {
+                }
+              ).chrome.runtime;
+              return await new Promise<ScriptCatDelivery<unknown>>(resolve => {
+                runtime.sendMessage(
+                  {action: payload.action, data: payload.data},
+                  response => {
+                    const transportError = runtime.lastError?.message;
+                    resolve(
+                      transportError
+                        ? {transportError}
+                        : {
+                            response:
+                              response as ScriptCatMessageResponse<unknown>,
+                          },
+                    );
+                  },
+                );
+              });
+            },
+            {action, data},
+          ) as Promise<ScriptCatDelivery<T>>,
+          remainingTimeout(deadline),
+          action,
+        );
+        break;
+      } catch (error) {
+        if (isRetryableTargetError(error) && Date.now() < deadline) {
+          continue;
+        }
+        if (error instanceof ManagedMcpError) {
+          throw error;
+        }
+        if (error instanceof Error && error.name === 'TimeoutError') {
+          throw new ManagedMcpError(
+            'TIMEOUT',
+            'Timed out waiting for the ScriptCat offscreen message transport.',
+            {action, timeout: this.#timeout},
+            {cause: error},
+          );
+        }
         throw new ManagedMcpError(
-          'TIMEOUT',
-          'Timed out waiting for the ScriptCat offscreen message transport.',
-          {action, timeout: this.#timeout},
+          'EXTENSION_NOT_READY',
+          'Failed to call the ScriptCat service-worker backend.',
+          {action},
           {cause: error},
         );
       }
-      throw new ManagedMcpError(
-        'EXTENSION_NOT_READY',
-        'Failed to call the ScriptCat service-worker backend.',
-        {action},
-        {cause: error},
-      );
     }
 
     if (delivery.transportError) {
@@ -129,41 +184,94 @@ export class ScriptCatBackend {
     return response.data as T;
   }
 
-  #findOffscreenTarget(): Target | undefined {
+  #findOffscreenTargets(): Target[] {
+    return this.#browser
+      .targets()
+      .filter(target => this.#isOffscreenTarget(target));
+  }
+
+  #isOffscreenTarget(target: Target): boolean {
     const expectedPrefix = `chrome-extension://${this.#extensionId}`;
+    return (
+      target.url().startsWith(expectedPrefix) &&
+      target.url().endsWith(OFFSCREEN_PATH)
+    );
+  }
+
+  #findServiceWorkerTarget(): Target | undefined {
+    const expectedPrefix = `chrome-extension://${this.#extensionId}/`;
     return this.#browser
       .targets()
       .find(
         target =>
-          target.url().startsWith(expectedPrefix) &&
-          target.url().endsWith(OFFSCREEN_PATH),
+          target.type() === 'service_worker' &&
+          target.url().startsWith(expectedPrefix),
       );
   }
 
-  async #getOffscreenPage(): Promise<Page> {
-    const target =
-      this.#findOffscreenTarget() ??
-      (await this.#browser.waitForTarget(
-        candidate => {
-          return (
-            candidate
-              .url()
-              .startsWith(`chrome-extension://${this.#extensionId}`) &&
-            candidate.url().endsWith(OFFSCREEN_PATH)
-          );
-        },
-        {timeout: this.#timeout},
-      ));
-    const page = (await target.page()) ?? (await target.asPage());
-    if (!page) {
-      throw new ManagedMcpError(
-        'EXTENSION_NOT_READY',
-        'The ScriptCat offscreen message transport is unavailable.',
-        {extensionId: this.#extensionId},
+  async #getOffscreenPage(
+    attemptedTargets: Set<Target>,
+    deadline: number,
+  ): Promise<{page: Page; target: Target}> {
+    while (true) {
+      const target = this.#findOffscreenTargets().find(
+        candidate => !attemptedTargets.has(candidate),
       );
+      if (target) {
+        attemptedTargets.add(target);
+        try {
+          const page = (await target.page()) ?? (await target.asPage());
+          if (page) {
+            return {page, target};
+          }
+        } catch (error) {
+          if (!isRetryableTargetError(error)) {
+            throw error;
+          }
+        }
+        continue;
+      }
+      const replacement = await this.#browser.waitForTarget(
+        candidate =>
+          this.#isOffscreenTarget(candidate) &&
+          !attemptedTargets.has(candidate),
+        {timeout: remainingTimeout(deadline)},
+      );
+      attemptedTargets.add(replacement);
+      try {
+        const page = (await replacement.page()) ?? (await replacement.asPage());
+        if (page) {
+          return {page, target: replacement};
+        }
+      } catch (error) {
+        if (!isRetryableTargetError(error)) {
+          throw error;
+        }
+      }
     }
-    return page;
   }
+}
+
+function remainingTimeout(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+function isManagedTransportProbeResponse(
+  response: unknown,
+): response is ManagedTransportProbeResponse {
+  return (
+    typeof response === 'object' &&
+    response !== null &&
+    (response as {managed?: unknown}).managed === true
+  );
+}
+
+function isRetryableTargetError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.includes('Target closed') ||
+      error.message.includes('Execution context was destroyed'))
+  );
 }
 
 async function withTimeout<T>(

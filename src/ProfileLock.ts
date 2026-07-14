@@ -13,16 +13,39 @@ import {ManagedMcpError} from './ManagedMcpError.js';
 export const PROFILE_LOCK_FILENAME = '.scriptcat-mcp.lock';
 const LOCK_READY = 'LOCKED\n';
 const LOCK_TIMEOUT_MS = 5_000;
+const LOCK_RELEASE_TIMEOUT_MS = 2_000;
+
+export type ProfileLockOwner = object;
 
 let lockProcess: ChildProcessWithoutNullStreams | undefined;
+let lockOwner: ProfileLockOwner | undefined;
+let lockedUserDataDir: string | undefined;
+let lockReleasePromise: Promise<void> | undefined;
 
-export async function acquireProfileLock(userDataDir: string): Promise<void> {
-  if (lockProcess && lockProcess.exitCode === null) {
-    return;
+export async function acquireProfileLock(
+  userDataDir: string,
+  owner: ProfileLockOwner,
+): Promise<void> {
+  if (lockReleasePromise) {
+    await lockReleasePromise;
+  }
+  const resolvedUserDataDir = path.resolve(userDataDir);
+  if (lockProcess && !isProcessExited(lockProcess)) {
+    if (lockOwner === owner && lockedUserDataDir === resolvedUserDataDir) {
+      return;
+    }
+    throw new ManagedMcpError(
+      'PROFILE_BUSY',
+      'The managed ScriptCat profile is already owned by another browser lifecycle.',
+      {userDataDir: resolvedUserDataDir},
+    );
   }
 
-  await fs.mkdir(userDataDir, {recursive: true});
-  const lockPath = path.join(userDataDir, PROFILE_LOCK_FILENAME);
+  lockProcess = undefined;
+  lockOwner = undefined;
+  lockedUserDataDir = undefined;
+  await fs.mkdir(resolvedUserDataDir, {recursive: true});
+  const lockPath = path.join(resolvedUserDataDir, PROFILE_LOCK_FILENAME);
   const child = spawn(
     'flock',
     [
@@ -37,11 +60,15 @@ export async function acquireProfileLock(userDataDir: string): Promise<void> {
   );
 
   try {
-    await waitForLock(child, userDataDir);
+    await waitForLock(child, resolvedUserDataDir);
     lockProcess = child;
+    lockOwner = owner;
+    lockedUserDataDir = resolvedUserDataDir;
   } catch (error) {
     child.stdin.destroy();
-    child.kill('SIGTERM');
+    if (!isProcessExited(child)) {
+      child.kill('SIGTERM');
+    }
     throw error;
   }
 }
@@ -117,22 +144,89 @@ async function waitForLock(
   });
 }
 
-export async function releaseProfileLock(): Promise<void> {
+export async function releaseProfileLock(
+  owner: ProfileLockOwner,
+): Promise<void> {
+  if (lockReleasePromise) {
+    if (lockOwner === owner) {
+      await lockReleasePromise;
+    }
+    return;
+  }
   const child = lockProcess;
-  lockProcess = undefined;
-  if (!child || child.exitCode !== null) {
+  if (!child || isProcessExited(child)) {
+    lockProcess = undefined;
+    lockOwner = undefined;
+    lockedUserDataDir = undefined;
+    return;
+  }
+  if (lockOwner !== owner) {
     return;
   }
 
+  const releasePromise = closeLockProcess(child);
+  lockReleasePromise = releasePromise;
+  try {
+    await releasePromise;
+  } finally {
+    if (lockProcess === child && isProcessExited(child)) {
+      lockProcess = undefined;
+      lockOwner = undefined;
+      lockedUserDataDir = undefined;
+    }
+    if (lockReleasePromise === releasePromise) {
+      lockReleasePromise = undefined;
+    }
+  }
+}
+
+async function closeLockProcess(
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
   child.stdin.end();
-  await new Promise<void>(resolve => {
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      resolve();
-    }, 2_000);
-    child.once('exit', () => {
-      clearTimeout(timeout);
-      resolve();
-    });
+  if (await waitForExit(child, LOCK_RELEASE_TIMEOUT_MS)) {
+    return;
+  }
+  child.kill('SIGTERM');
+  if (await waitForExit(child, LOCK_RELEASE_TIMEOUT_MS)) {
+    return;
+  }
+  child.kill('SIGKILL');
+  await waitForExit(child);
+}
+
+async function waitForExit(
+  child: ChildProcessWithoutNullStreams,
+  timeout?: number,
+): Promise<boolean> {
+  if (isProcessExited(child)) {
+    return true;
+  }
+  return await new Promise(resolve => {
+    let timeoutId: NodeJS.Timeout | undefined;
+    const finish = (exited: boolean) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      child.off('exit', onExit);
+      resolve(exited);
+    };
+    const onExit = () => {
+      finish(true);
+    };
+    child.once('exit', onExit);
+    if (isProcessExited(child)) {
+      finish(true);
+      return;
+    }
+    if (timeout !== undefined) {
+      timeoutId = setTimeout(() => {
+        finish(false);
+      }, timeout);
+    }
   });
+}
+
+function isProcessExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
 }
