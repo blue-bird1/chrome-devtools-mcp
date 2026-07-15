@@ -12,6 +12,7 @@ import path from 'node:path';
 import {logger} from './logger.js';
 import {
   acquireProfileLock,
+  bindProfileLockToBrowser,
   type ProfileLockOwner,
   releaseProfileLock,
 } from './ProfileLock.js';
@@ -310,6 +311,7 @@ export async function ensureBrowserLaunched(
   const profileLockOwner: ProfileLockOwner = {};
   const launchPromise = (async (): Promise<Browser> => {
     let profileLockAcquired = false;
+    let launched: Browser | undefined;
     try {
       if (options.profileLock) {
         if (!options.userDataDir) {
@@ -320,7 +322,16 @@ export async function ensureBrowserLaunched(
         await acquireProfileLock(options.userDataDir, profileLockOwner);
         profileLockAcquired = true;
       }
-      const launched = await launch(options);
+      launched = await launch(options);
+      if (profileLockAcquired) {
+        const child = launched.process();
+        if (!child) {
+          throw new Error(
+            'The launched browser does not expose its OS process.',
+          );
+        }
+        await bindProfileLockToBrowser(profileLockOwner, child);
+      }
       // Assign mode and ownership before browser; see the connect path above
       // for rationale.
       browserMode = 'launched';
@@ -330,6 +341,14 @@ export async function ensureBrowserLaunched(
       browser = launched;
       return browser;
     } catch (error) {
+      if (launched) {
+        await closeLaunchedBrowser(launched).catch(closeError => {
+          logger?.(
+            'Failed to close browser after profile lock setup',
+            closeError,
+          );
+        });
+      }
       if (profileLockAcquired) {
         await releaseProfileLock(profileLockOwner);
       }

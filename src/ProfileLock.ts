@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+} from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -14,12 +18,67 @@ export const PROFILE_LOCK_FILENAME = '.scriptcat-mcp.lock';
 const LOCK_READY = 'LOCKED\n';
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_RELEASE_TIMEOUT_MS = 2_000;
+const PROFILE_LOCK_GUARDIAN = [
+  "browser_pid=''",
+  "browser_start_time=''",
+  "control_pid=''",
+  'owner_closed=0',
+  'read_start_time() {',
+  '  stat_line=$(cat "/proc/$browser_pid/stat" 2>/dev/null) || return 1',
+  '  stat_line=${stat_line##*) }',
+  '  set -- $stat_line',
+  '  [ "$#" -ge 20 ] || return 1',
+  '  shift 19',
+  '  printf \'%s\\n\' "$1"',
+  '}',
+  'browser_process_alive() {',
+  '  [ "$(read_start_time)" = "$browser_start_time" ]',
+  '}',
+  'browser_group_alive() {',
+  '  kill -0 -- "-$browser_pid" 2>/dev/null',
+  '}',
+  'managed_browser_alive() {',
+  '  browser_process_alive || browser_group_alive',
+  '}',
+  'stop_control_reader() {',
+  '  if [ -n "$control_pid" ]; then',
+  '    kill "$control_pid" 2>/dev/null || true',
+  '    wait "$control_pid" 2>/dev/null || true',
+  '    control_pid=',
+  '  fi',
+  '}',
+  "trap 'owner_closed=1' USR1",
+  "trap 'exit 0' HUP INT TERM",
+  "trap 'stop_control_reader' EXIT",
+  "printf 'LOCKED\\n'",
+  "IFS=' ' read -r browser_pid browser_start_time || exit 0",
+  '(cat >/dev/null && kill -USR1 "$$") &',
+  'control_pid=$!',
+  'while managed_browser_alive && [ "$owner_closed" -eq 0 ]; do',
+  '  sleep 0.05',
+  'done',
+  'if managed_browser_alive; then',
+  '  kill -TERM -- "-$browser_pid" 2>/dev/null || true',
+  '  attempts=0',
+  '  while managed_browser_alive && [ "$attempts" -lt 40 ]; do',
+  '    sleep 0.05',
+  '    attempts=$((attempts + 1))',
+  '  done',
+  '  if managed_browser_alive; then',
+  '    kill -KILL -- "-$browser_pid" 2>/dev/null || true',
+  '  fi',
+  'fi',
+  'while managed_browser_alive; do',
+  '  sleep 0.05',
+  'done',
+].join('\n');
 
 export type ProfileLockOwner = object;
 
 let lockProcess: ChildProcessWithoutNullStreams | undefined;
 let lockOwner: ProfileLockOwner | undefined;
 let lockedUserDataDir: string | undefined;
+let lockedBrowserPid: number | undefined;
 let lockReleasePromise: Promise<void> | undefined;
 
 export async function acquireProfileLock(
@@ -44,6 +103,7 @@ export async function acquireProfileLock(
   lockProcess = undefined;
   lockOwner = undefined;
   lockedUserDataDir = undefined;
+  lockedBrowserPid = undefined;
   await fs.mkdir(resolvedUserDataDir, {recursive: true});
   const lockPath = path.join(resolvedUserDataDir, PROFILE_LOCK_FILENAME);
   const child = spawn(
@@ -51,12 +111,13 @@ export async function acquireProfileLock(
     [
       '--exclusive',
       '--nonblock',
+      '--no-fork',
       lockPath,
       'sh',
       '-c',
-      `printf '${LOCK_READY}'; cat >/dev/null`,
+      PROFILE_LOCK_GUARDIAN,
     ],
-    {stdio: ['pipe', 'pipe', 'pipe']},
+    {detached: true, stdio: ['pipe', 'pipe', 'pipe']},
   );
 
   try {
@@ -71,6 +132,63 @@ export async function acquireProfileLock(
     }
     throw error;
   }
+}
+
+export async function bindProfileLockToBrowser(
+  owner: ProfileLockOwner,
+  browserProcess: ChildProcess,
+): Promise<void> {
+  const guardian = lockProcess;
+  if (
+    !guardian ||
+    isProcessExited(guardian) ||
+    lockOwner !== owner ||
+    !lockedUserDataDir
+  ) {
+    throw new Error('The managed profile lock is not owned by this browser.');
+  }
+  const browserPid = browserProcess.pid;
+  if (!browserPid) {
+    throw new Error('The launched browser does not expose its process ID.');
+  }
+  if (lockedBrowserPid !== undefined) {
+    if (lockedBrowserPid === browserPid) {
+      return;
+    }
+    throw new Error('The managed profile lock is already bound to a browser.');
+  }
+
+  const browserStartTime = await readProcessStartTime(browserPid);
+  if (lockProcess !== guardian || isProcessExited(guardian)) {
+    throw new Error('The managed profile lock guardian exited during launch.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    guardian.stdin.write(`${browserPid} ${browserStartTime}\n`, error => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  lockedBrowserPid = browserPid;
+}
+
+async function readProcessStartTime(pid: number): Promise<string> {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+  const commandEnd = stat.lastIndexOf(') ');
+  if (commandEnd === -1) {
+    throw new Error(`Could not read the launched browser process ${pid}.`);
+  }
+  const fieldsAfterCommand = stat
+    .slice(commandEnd + 2)
+    .trim()
+    .split(/\s+/);
+  const startTime = fieldsAfterCommand[19];
+  if (!startTime) {
+    throw new Error(`Could not read the launched browser process ${pid}.`);
+  }
+  return startTime;
 }
 
 async function waitForLock(
@@ -158,6 +276,7 @@ export async function releaseProfileLock(
     lockProcess = undefined;
     lockOwner = undefined;
     lockedUserDataDir = undefined;
+    lockedBrowserPid = undefined;
     return;
   }
   if (lockOwner !== owner) {
@@ -173,6 +292,7 @@ export async function releaseProfileLock(
       lockProcess = undefined;
       lockOwner = undefined;
       lockedUserDataDir = undefined;
+      lockedBrowserPid = undefined;
     }
     if (lockReleasePromise === releasePromise) {
       lockReleasePromise = undefined;

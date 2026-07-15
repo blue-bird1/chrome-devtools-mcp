@@ -10,7 +10,9 @@ import {spawn} from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 import {describe, it} from 'node:test';
+import {fileURLToPath} from 'node:url';
 
 import {executablePath} from 'puppeteer';
 
@@ -19,9 +21,18 @@ import {
   closeBrowserWithBackstop,
   ensureBrowserLaunched,
 } from '../src/browser.js';
-import {PROFILE_LOCK_FILENAME} from '../src/ProfileLock.js';
+import {ManagedMcpError} from '../src/ManagedMcpError.js';
+import {
+  acquireProfileLock,
+  PROFILE_LOCK_FILENAME,
+  releaseProfileLock,
+} from '../src/ProfileLock.js';
 
 const CLOSE_TEST_TIMEOUT_MS = 10_000;
+const OWNER_READY_TIMEOUT_MS = 15_000;
+const OWNER_FIXTURE = fileURLToPath(
+  new URL('./fixtures/ManagedBrowserOwner.js', import.meta.url),
+);
 
 async function profileLockIsAvailable(profile: string): Promise<boolean> {
   const child = spawn('flock', [
@@ -47,6 +58,99 @@ async function waitForExit(child: ChildProcess): Promise<void> {
       resolve();
     });
   });
+}
+
+async function waitForOwnerReady(owner: ChildProcess): Promise<number> {
+  const stdout = owner.stdout;
+  if (!stdout) {
+    throw new Error('The managed browser owner has no stdout pipe.');
+  }
+  return await new Promise((resolve, reject) => {
+    let output = '';
+    const finish = (error?: Error, browserPid?: number) => {
+      clearTimeout(timeout);
+      stdout.off('data', onData);
+      owner.off('error', onError);
+      owner.off('exit', onExit);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(browserPid!);
+    };
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+      const newline = output.indexOf('\n');
+      if (newline === -1) {
+        return;
+      }
+      const browserPid = Number.parseInt(output.slice(0, newline), 10);
+      if (!Number.isSafeInteger(browserPid) || browserPid <= 0) {
+        finish(new Error('The managed browser owner returned an invalid PID.'));
+        return;
+      }
+      finish(undefined, browserPid);
+    };
+    const onError = (error: Error) => {
+      finish(error);
+    };
+    const onExit = () => {
+      finish(new Error('The managed browser owner exited before startup.'));
+    };
+    const timeout = setTimeout(() => {
+      finish(new Error('Timed out waiting for the managed browser owner.'));
+    }, OWNER_READY_TIMEOUT_MS);
+    stdout.on('data', onData);
+    owner.once('error', onError);
+    owner.once('exit', onExit);
+  });
+}
+
+async function readDirectChildren(pid: number): Promise<number[]> {
+  const children = await fs.readFile(
+    `/proc/${pid}/task/${pid}/children`,
+    'utf8',
+  );
+  return children
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(childPid => Number.parseInt(childPid, 10));
+}
+
+async function readProcessGroupId(pid: number): Promise<number> {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+  const commandEnd = stat.lastIndexOf(') ');
+  assert.notStrictEqual(commandEnd, -1);
+  const fieldsAfterCommand = stat
+    .slice(commandEnd + 2)
+    .trim()
+    .split(/\s+/);
+  const processGroupId = Number.parseInt(fieldsAfterCommand[2]!, 10);
+  assert.ok(Number.isSafeInteger(processGroupId));
+  return processGroupId;
+}
+
+function processGroupExists(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function waitForProcessGroupExit(processGroupId: number): Promise<void> {
+  const deadline = Date.now() + CLOSE_TEST_TIMEOUT_MS;
+  while (processGroupExists(processGroupId)) {
+    if (Date.now() >= deadline) {
+      throw new Error('Timed out waiting for a process group to exit.');
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
 }
 
 async function waitForTermination(
@@ -159,6 +263,72 @@ async function cleanupManagedBrowser(
 }
 
 describe('managed browser shutdown', () => {
+  it('keeps the profile owned after SIGKILL until Chrome is reaped without orphans', async () => {
+    const profile = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'scriptcat-abrupt-browser-owner-'),
+    );
+    const contender = {};
+    const owner = spawn(
+      process.execPath,
+      [OWNER_FIXTURE, profile, await executablePath()],
+      {stdio: ['pipe', 'pipe', 'pipe']},
+    );
+    let browserProcessGroupId: number | undefined;
+    let guardianProcessGroupId: number | undefined;
+    try {
+      const browserPid = await waitForOwnerReady(owner);
+      const guardianPids = (await readDirectChildren(owner.pid!)).filter(
+        childPid => childPid !== browserPid,
+      );
+      assert.strictEqual(guardianPids.length, 1);
+      const guardianPid = guardianPids[0]!;
+      browserProcessGroupId = await readProcessGroupId(browserPid);
+      guardianProcessGroupId = await readProcessGroupId(guardianPid);
+      assert.strictEqual(browserProcessGroupId, browserPid);
+      assert.strictEqual(guardianProcessGroupId, guardianPid);
+
+      process.kill(-browserProcessGroupId, 'SIGSTOP');
+      owner.kill('SIGKILL');
+      await waitForExit(owner);
+      assert.strictEqual(processGroupExists(browserProcessGroupId), true);
+      await assert.rejects(acquireProfileLock(profile, contender), error => {
+        assert.ok(error instanceof ManagedMcpError);
+        assert.strictEqual(error.code, 'PROFILE_BUSY');
+        return true;
+      });
+
+      process.kill(-browserProcessGroupId, 'SIGCONT');
+      await waitForProcessGroupExit(browserProcessGroupId);
+      await waitForProcessGroupExit(guardianProcessGroupId);
+      await acquireProfileLock(profile, contender);
+      await releaseProfileLock(contender);
+      assert.strictEqual(processGroupExists(browserProcessGroupId), false);
+      assert.strictEqual(processGroupExists(guardianProcessGroupId), false);
+    } finally {
+      await releaseProfileLock(contender);
+      if (owner.exitCode === null && owner.signalCode === null) {
+        owner.kill('SIGKILL');
+        await waitForExit(owner);
+      }
+      if (
+        browserProcessGroupId !== undefined &&
+        processGroupExists(browserProcessGroupId)
+      ) {
+        process.kill(-browserProcessGroupId, 'SIGCONT');
+        process.kill(-browserProcessGroupId, 'SIGKILL');
+        await waitForProcessGroupExit(browserProcessGroupId);
+      }
+      if (
+        guardianProcessGroupId !== undefined &&
+        processGroupExists(guardianProcessGroupId)
+      ) {
+        process.kill(-guardianProcessGroupId, 'SIGKILL');
+        await waitForProcessGroupExit(guardianProcessGroupId);
+      }
+      await fs.rm(profile, {recursive: true, force: true});
+    }
+  });
+
   it('reaps a disconnected Chrome before relaunching with the same profile', async () => {
     const {browser, child, options, profile} = await launchManagedBrowser();
     const termination = delayTermination(child);
