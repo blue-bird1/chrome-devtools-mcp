@@ -253,6 +253,7 @@ export type Context = Readonly<{
   ): void;
   installExtension(path: string): Promise<string>;
   uninstallExtension(id: string): Promise<void>;
+  reloadExtension(id: string): Promise<void>;
   triggerExtensionAction(id: string): Promise<void>;
   listExtensions(): Promise<Map<string, Extension>>;
   getExtension(id: string): Promise<Extension | undefined>;

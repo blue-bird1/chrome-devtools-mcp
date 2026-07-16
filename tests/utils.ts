@@ -25,6 +25,8 @@ import sinon from 'sinon';
 import type {ParsedArguments} from '../src/bin/chrome-devtools-mcp-cli-options.js';
 import {McpContext} from '../src/McpContext.js';
 import {McpResponse} from '../src/McpResponse.js';
+import {ScriptCatManager} from '../src/ScriptCatManager.js';
+import type {ScriptCatManagerOptions} from '../src/ScriptCatManager.js';
 import {TextSnapshot} from '../src/TextSnapshot.js';
 import {DevTools} from '../src/third_party/index.js';
 import {stableIdSymbol} from '../src/utils/id.js';
@@ -121,6 +123,7 @@ export async function withMcpContext(
     args?: string[];
     blockedUrlPattern?: string[];
     allowedUrlPattern?: string[];
+    scriptCat?: ScriptCatManagerOptions;
   } = {},
   args: Partial<ParsedArguments> = {},
 ) {
@@ -138,6 +141,9 @@ export async function withMcpContext(
         performanceCrux: options.performanceCrux ?? true,
         allowList: options.allowedUrlPattern,
         blocklist: options.blockedUrlPattern,
+        scriptCat: options.scriptCat
+          ? await ScriptCatManager.create(browser, options.scriptCat)
+          : undefined,
       },
       Locator,
     );

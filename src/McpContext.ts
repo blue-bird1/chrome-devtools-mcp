@@ -893,12 +893,23 @@ export class McpContext implements Context {
   }
 
   async installExtension(extensionPath: string): Promise<string> {
+    await this.#scriptCat?.assertExtensionInstallationAllowed(extensionPath);
     const id = await this.browser.installExtension(extensionPath);
     return id;
   }
 
   async uninstallExtension(id: string): Promise<void> {
+    this.#scriptCat?.assertExtensionMutationAllowed(id, 'uninstall');
     await this.browser.uninstallExtension(id);
+  }
+
+  async reloadExtension(id: string): Promise<void> {
+    this.#scriptCat?.assertExtensionMutationAllowed(id, 'reload');
+    const extension = await this.getExtension(id);
+    if (!extension) {
+      throw new Error(`Extension with ID ${id} not found.`);
+    }
+    await this.installExtension(extension.path);
   }
 
   async triggerExtensionAction(id: string): Promise<void> {
@@ -924,6 +935,7 @@ export class McpContext implements Context {
     id: string,
     enabled: boolean,
   ): Promise<void> {
+    this.#scriptCat?.assertUserScriptsAccessChangeAllowed(id, enabled);
     await setExtensionUserScriptsAccess(this.browser, id, enabled);
   }
 

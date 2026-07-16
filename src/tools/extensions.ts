@@ -79,11 +79,7 @@ export const reloadExtension = defineTool({
   verifyFilesSchema: [],
   handler: async (request, response, context) => {
     const {id} = request.params;
-    const extension = await context.getExtension(id);
-    if (!extension) {
-      throw new Error(`Extension with ID ${id} not found.`);
-    }
-    await context.installExtension(extension.path);
+    await context.reloadExtension(id);
     response.appendResponseLine('Extension reloaded.');
   },
 });

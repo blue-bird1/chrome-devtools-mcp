@@ -9,7 +9,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 
-import {ManagedMcpError} from './ManagedMcpError.js';
+import {
+  MANAGED_EXTENSION_PROTECTED_ERROR_CODE,
+  ManagedMcpError,
+} from './ManagedMcpError.js';
 import {ScriptCatBackend} from './ScriptCatBackend.js';
 import type {Browser, Extension} from './third_party/index.js';
 
@@ -86,6 +89,9 @@ export interface ScriptCatManagerOptions {
   repositoryRoot: string;
   timeout: number;
 }
+
+export type ManagedExtensionMutation =
+  'install' | 'reload' | 'uninstall' | 'disable-user-scripts';
 
 export async function setExtensionUserScriptsAccess(
   browser: Browser,
@@ -187,6 +193,38 @@ export class ScriptCatManager {
       );
     }
     await this.#waitUntilReady();
+  }
+
+  async assertExtensionInstallationAllowed(
+    extensionPath: string,
+  ): Promise<void> {
+    let canonicalPath: string;
+    try {
+      canonicalPath = await fs.realpath(extensionPath);
+    } catch {
+      return;
+    }
+    if (canonicalPath === this.#extensionPath) {
+      this.#throwProtectedMutation('install');
+    }
+  }
+
+  assertExtensionMutationAllowed(
+    extensionId: string,
+    mutation: Exclude<ManagedExtensionMutation, 'install'>,
+  ): void {
+    if (extensionId === this.#extensionId) {
+      this.#throwProtectedMutation(mutation);
+    }
+  }
+
+  assertUserScriptsAccessChangeAllowed(
+    extensionId: string,
+    enabled: boolean,
+  ): void {
+    if (extensionId === this.#extensionId && !enabled) {
+      this.#throwProtectedMutation('disable-user-scripts');
+    }
   }
 
   async status(): Promise<ScriptCatStatus> {
@@ -396,6 +434,18 @@ export class ScriptCatManager {
       'TIMEOUT',
       'Timed out waiting for the managed ScriptCat service worker.',
       {extensionId: this.#extensionId, lastStatus},
+    );
+  }
+
+  #throwProtectedMutation(mutation: ManagedExtensionMutation): never {
+    throw new ManagedMcpError(
+      MANAGED_EXTENSION_PROTECTED_ERROR_CODE,
+      'The managed ScriptCat extension cannot be mutated by a generic extension tool.',
+      {
+        extensionId: this.#extensionId,
+        extensionPath: this.#extensionPath,
+        mutation,
+      },
     );
   }
 }

@@ -4,11 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export const MANAGED_EXTENSION_PROTECTED_ERROR_CODE =
+  'MANAGED_EXTENSION_PROTECTED' as const;
+
 export type ManagedMcpErrorCode =
   | 'PROFILE_BUSY'
   | 'BROWSER_UNSUPPORTED'
   | 'EXTENSION_NOT_READY'
   | 'INVALID_USERSCRIPT'
+  | typeof MANAGED_EXTENSION_PROTECTED_ERROR_CODE
   | 'SCRIPT_NOT_FOUND'
   | 'TIMEOUT';
 
