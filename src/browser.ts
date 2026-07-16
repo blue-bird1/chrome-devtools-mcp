@@ -11,15 +11,15 @@ import path from 'node:path';
 
 import {logger} from './logger.js';
 import {
+  assertManagedReleaseConsistency,
+  type ManagedReleaseConsistencyOptions,
+} from './ManagedReleaseConsistency.js';
+import {
   acquireProfileLock,
   bindProfileLockToBrowser,
   type ProfileLockOwner,
   releaseProfileLock,
 } from './ProfileLock.js';
-import {
-  assertManagedReleaseConsistency,
-  type ManagedReleaseConsistencyOptions,
-} from './ScriptCatManager.js';
 import type {
   Browser,
   ChromeReleaseChannel,

@@ -10,95 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
-import {
-  ManagedMcpError,
-  RELEASE_MISMATCH_ERROR_CODE,
-} from '../src/ManagedMcpError.js';
-import {
-  assertManagedReleaseConsistency,
-  ScriptCatManager,
-} from '../src/ScriptCatManager.js';
+import {ManagedMcpError} from '../src/ManagedMcpError.js';
+import {ScriptCatManager} from '../src/ScriptCatManager.js';
 import type {Browser, Page, Target} from '../src/third_party/index.js';
-
-import {createManagedReleaseFixture} from './fixtures/ManagedRelease.js';
-import type {ManagedReleasePaths} from './fixtures/ManagedRelease.js';
 
 const EXTENSION_ID = 'ckchkcgpbkhleahkgkbiiikpcjdbopje';
 const OFFSCREEN_URL = `chrome-extension://${EXTENSION_ID}/src/offscreen.html`;
-
-describe('managed release consistency', () => {
-  it('accepts components from the canonical current release', async () => {
-    const fixture = await createManagedReleaseFixture();
-    try {
-      await assertManagedReleaseConsistency(fixture.releaseA);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
-  const mismatchCases = [
-    {
-      name: 'MCP entrypoint',
-      currentRelease: 'release-a',
-      paths: (
-        releaseA: ManagedReleasePaths,
-        releaseB: ManagedReleasePaths,
-      ) => ({
-        ...releaseA,
-        mcpEntrypointPath: releaseB.mcpEntrypointPath,
-      }),
-    },
-    {
-      name: 'browser executable',
-      currentRelease: 'release-a',
-      paths: (
-        releaseA: ManagedReleasePaths,
-        releaseB: ManagedReleasePaths,
-      ) => ({
-        ...releaseA,
-        browserExecutablePath: releaseB.browserExecutablePath,
-      }),
-    },
-    {
-      name: 'managed extension',
-      currentRelease: 'release-a',
-      paths: (
-        releaseA: ManagedReleasePaths,
-        releaseB: ManagedReleasePaths,
-      ) => ({
-        ...releaseA,
-        extensionPath: releaseB.extensionPath,
-      }),
-    },
-    {
-      name: 'current release',
-      currentRelease: 'release-b',
-      paths: (releaseA: ManagedReleasePaths) => releaseA,
-    },
-  ];
-
-  for (const mismatchCase of mismatchCases) {
-    it(`rejects a mismatched ${mismatchCase.name}`, async () => {
-      const fixture = await createManagedReleaseFixture(
-        mismatchCase.currentRelease,
-      );
-      try {
-        await assert.rejects(
-          assertManagedReleaseConsistency(
-            mismatchCase.paths(fixture.releaseA, fixture.releaseB),
-          ),
-          error => {
-            assert.ok(error instanceof ManagedMcpError);
-            assert.strictEqual(error.code, RELEASE_MISMATCH_ERROR_CODE);
-            return true;
-          },
-        );
-      } finally {
-        await fixture.cleanup();
-      }
-    });
-  }
-});
 
 interface WorkerLike {
   evaluate(callback: () => unknown): Promise<unknown>;

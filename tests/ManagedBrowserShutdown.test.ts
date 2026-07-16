@@ -23,8 +23,8 @@ import {
   ensureBrowserLaunched,
 } from '../src/browser.js';
 import {
+  ACTIVATION_INCOMPLETE_ERROR_CODE,
   ManagedMcpError,
-  RELEASE_MISMATCH_ERROR_CODE,
 } from '../src/ManagedMcpError.js';
 import {
   acquireProfileLock,
@@ -270,29 +270,30 @@ async function cleanupManagedBrowser(
 }
 
 describe('managed browser shutdown', () => {
-  it('releases the profile lock without launching Chrome on a release mismatch', async () => {
+  it('releases the profile lock without launching Chrome during an incomplete activation', async () => {
     const fixture = await createManagedReleaseFixture();
     const profile = await fs.mkdtemp(
-      path.join(os.tmpdir(), 'scriptcat-release-mismatch-profile-'),
+      path.join(os.tmpdir(), 'scriptcat-activation-incomplete-profile-'),
     );
     const launch = sinon.stub(puppeteer, 'launch');
     try {
+      await fs.writeFile(
+        path.join(fixture.dataRoot, 'activation-journal.json'),
+        '{}\n',
+      );
       await assert.rejects(
         ensureBrowserLaunched({
           headless: true,
           isolated: false,
           userDataDir: profile,
-          executablePath: fixture.releaseB.browserExecutablePath,
+          executablePath: fixture.releaseA.browserExecutablePath,
           devtools: false,
           profileLock: true,
-          managedReleaseConsistency: {
-            ...fixture.releaseA,
-            browserExecutablePath: fixture.releaseB.browserExecutablePath,
-          },
+          managedReleaseConsistency: fixture.releaseA,
         }),
         error => {
           assert.ok(error instanceof ManagedMcpError);
-          assert.strictEqual(error.code, RELEASE_MISMATCH_ERROR_CODE);
+          assert.strictEqual(error.code, ACTIVATION_INCOMPLETE_ERROR_CODE);
           return true;
         },
       );
@@ -300,6 +301,41 @@ describe('managed browser shutdown', () => {
       assert.strictEqual(await profileLockIsAvailable(profile), true);
     } finally {
       launch.restore();
+      await fixture.cleanup();
+      await fs.rm(profile, {recursive: true, force: true});
+    }
+  });
+
+  it('acquires the profile lock before checking activation state', async () => {
+    const fixture = await createManagedReleaseFixture();
+    const profile = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'scriptcat-activation-lock-order-profile-'),
+    );
+    const owner = {};
+    try {
+      await fs.writeFile(
+        path.join(fixture.dataRoot, 'activation-journal.json'),
+        '{}\n',
+      );
+      await acquireProfileLock(profile, owner);
+      await assert.rejects(
+        ensureBrowserLaunched({
+          headless: true,
+          isolated: false,
+          userDataDir: profile,
+          executablePath: fixture.releaseA.browserExecutablePath,
+          devtools: false,
+          profileLock: true,
+          managedReleaseConsistency: fixture.releaseA,
+        }),
+        error => {
+          assert.ok(error instanceof ManagedMcpError);
+          assert.strictEqual(error.code, 'PROFILE_BUSY');
+          return true;
+        },
+      );
+    } finally {
+      await releaseProfileLock(owner);
       await fixture.cleanup();
       await fs.rm(profile, {recursive: true, force: true});
     }
