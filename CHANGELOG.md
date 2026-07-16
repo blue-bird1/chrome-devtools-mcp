@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.7.0](https://github.com/ChromeDevTools/chrome-devtools-mcp/compare/chrome-devtools-mcp-v1.6.0...chrome-devtools-mcp-v1.7.0) (2026-07-16)
+
+
+### 🎉 Features
+
+* Add get_heapsnapshot_object_details MCP tool ([#2374](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2374)) ([8432cb9](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/8432cb97a2a18f48afcb542f27dd88d7e5a11f36))
+* Emit native contexts in snapshot summary ([#2375](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2375)) ([f78a911](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/f78a911dc0ce843b08549560d0357712d3b18609))
+
+
+### 🛠️ Fixes
+
+* improve daemon lifecycle ([#2360](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2360)) ([3ee6a27](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/3ee6a2710029f3718792da634c048bf4de90eaa6))
+
+
+### 📄 Documentation
+
+* update security.md ([#2362](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2362)) ([5012b07](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/5012b077997618edeb2291d39d17553280f5b2a6))
+
+
+### 🏗️ Refactor
+
+* move tool groups ([#2365](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2365)) ([2d944f9](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/2d944f9f4e6b107a6b42fb82c7e957384883bf7d))
+* use a destructor to shorten the calls ([#2376](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2376)) ([77e1d3f](https://github.com/ChromeDevTools/chrome-devtools-mcp/commit/77e1d3f9616d5b32671da0b9ea094f4929c14a9c))
+
 ## [1.6.0](https://github.com/ChromeDevTools/chrome-devtools-mcp/compare/chrome-devtools-mcp-v1.5.0...chrome-devtools-mcp-v1.6.0) (2026-07-14)
 
 
