@@ -212,12 +212,7 @@ export class ScriptCatManager {
     }
     this.#assertManagedExtension(extension);
 
-    const accessEnabled = await this.#backend.userScriptsAccessEnabled();
-    if (accessEnabled === null) {
-      throw this.#notReady(
-        'The managed ScriptCat service worker is unavailable for access verification.',
-      );
-    }
+    const accessEnabled = await this.#ensureUserScriptsAccess();
     if (!accessEnabled) {
       await setExtensionUserScriptsAccess(
         this.#browser,
@@ -475,6 +470,47 @@ export class ScriptCatManager {
       'TIMEOUT',
       'Timed out waiting for the managed ScriptCat service worker.',
       {extensionId: this.#extensionId, lastStatus},
+    );
+  }
+
+  async #ensureUserScriptsAccess(): Promise<boolean> {
+    const accessEnabled = await this.#backend.userScriptsAccessEnabled();
+    if (accessEnabled !== null) {
+      return accessEnabled;
+    }
+    await this.#startManagedServiceWorker();
+    return await this.#waitForUserScriptsAccess();
+  }
+
+  async #startManagedServiceWorker(): Promise<void> {
+    try {
+      const connection = this.#connection();
+      await connection.send('ServiceWorker.enable');
+      await connection.send('ServiceWorker.startWorker', {
+        scopeURL: `chrome-extension://${this.#extensionId}/`,
+      });
+    } catch (error) {
+      throw new ManagedMcpError(
+        'BROWSER_UNSUPPORTED',
+        'The browser does not support starting the managed ScriptCat service worker.',
+        {extensionId: this.#extensionId},
+        {cause: error},
+      );
+    }
+  }
+
+  async #waitForUserScriptsAccess(): Promise<boolean> {
+    const deadline = Date.now() + this.#timeout;
+    while (Date.now() < deadline) {
+      const accessEnabled = await this.#backend.userScriptsAccessEnabled();
+      if (accessEnabled !== null) {
+        return accessEnabled;
+      }
+      await delay(100);
+    }
+    throw this.#notReady(
+      'The managed ScriptCat service worker did not become available after startup.',
+      {extensionId: this.#extensionId},
     );
   }
 
