@@ -39,6 +39,16 @@ function offscreenTarget(page: Page): Target {
   } as unknown as Target;
 }
 
+function pageTarget(session: {
+  send<T>(method: string, params?: Record<string, unknown>): Promise<T>;
+}): Target {
+  return {
+    type: () => 'page',
+    url: () => 'about:blank',
+    createCDPSession: async () => session,
+  } as unknown as Target;
+}
+
 function serviceWorkerTarget(worker: WorkerLike): Target {
   return {
     type: () => 'service_worker',
@@ -503,8 +513,30 @@ describe('ScriptCatManager', () => {
       enabled: true,
     };
     let workerStarted = false;
-    const requests: Array<{method: string; params?: Record<string, unknown>}> =
-      [];
+    const rootRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
+    const pageRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
+    const session = {
+      send: async <T>(
+        method: string,
+        params?: Record<string, unknown>,
+      ): Promise<T> => {
+        pageRequests.push({method, params});
+        if (method === 'ServiceWorker.enable') {
+          return undefined as T;
+        }
+        if (method === 'ServiceWorker.startWorker') {
+          workerStarted = true;
+          return undefined as T;
+        }
+        throw new Error(`Unexpected page CDP method: ${method}`);
+      },
+    };
     const browser = {
       _connection: {
         send: async <T>(
@@ -514,15 +546,8 @@ describe('ScriptCatManager', () => {
           if (method === 'Extensions.getExtensions') {
             return {extensions: [extension]} as T;
           }
-          requests.push({method, params});
-          if (method === 'ServiceWorker.enable') {
-            return undefined as T;
-          }
-          if (method === 'ServiceWorker.startWorker') {
-            workerStarted = true;
-            return undefined as T;
-          }
-          throw new Error(`Unexpected CDP method: ${method}`);
+          rootRequests.push({method, params});
+          throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
       extensions: async () =>
@@ -537,6 +562,7 @@ describe('ScriptCatManager', () => {
         ]),
       targets: () => [
         ...(workerStarted ? [serviceWorkerTarget(worker)] : []),
+        pageTarget(session),
         offscreenTarget(healthyPage()),
       ],
     } as unknown as Browser;
@@ -550,7 +576,8 @@ describe('ScriptCatManager', () => {
       });
       await manager.initialize();
 
-      assert.deepStrictEqual(requests, [
+      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(pageRequests, [
         {
           method: 'ServiceWorker.enable',
           params: undefined,
@@ -585,8 +612,10 @@ describe('ScriptCatManager', () => {
       await createManagerPaths();
     const restoreChrome = installChromeApi();
     const worker = readyWorker();
-    const requests: Array<{method: string; params?: Record<string, unknown>}> =
-      [];
+    const rootRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
     const browser = {
       _connection: {
         send: async <T>(
@@ -605,13 +634,18 @@ describe('ScriptCatManager', () => {
               ],
             } as T;
           }
-          requests.push({method, params});
-          throw new Error(`Unexpected CDP method: ${method}`);
+          rootRequests.push({method, params});
+          throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
       extensions: readyExtension(worker),
       targets: () => [
         serviceWorkerTarget(worker),
+        pageTarget({
+          send: async <T>(): Promise<T> => {
+            throw new Error('A ready worker must not start a CDP session.');
+          },
+        }),
         offscreenTarget(healthyPage()),
       ],
     } as unknown as Browser;
@@ -624,7 +658,7 @@ describe('ScriptCatManager', () => {
         timeout: 1_000,
       });
       await manager.initialize();
-      assert.deepStrictEqual(requests, []);
+      assert.deepStrictEqual(rootRequests, []);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});
@@ -635,8 +669,26 @@ describe('ScriptCatManager', () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const restoreChrome = installChromeApi();
-    const requests: Array<{method: string; params?: Record<string, unknown>}> =
-      [];
+    const rootRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
+    const pageRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
+    const session = {
+      send: async <T>(
+        method: string,
+        params?: Record<string, unknown>,
+      ): Promise<T> => {
+        pageRequests.push({method, params});
+        if (method === 'ServiceWorker.enable') {
+          return undefined as T;
+        }
+        throw new Error('ServiceWorker.startWorker unavailable');
+      },
+    };
     const browser = {
       _connection: {
         send: async <T>(
@@ -655,11 +707,80 @@ describe('ScriptCatManager', () => {
               ],
             } as T;
           }
-          requests.push({method, params});
-          if (method === 'ServiceWorker.enable') {
-            return undefined as T;
+          rootRequests.push({method, params});
+          throw new Error(`Unexpected root CDP method: ${method}`);
+        },
+      },
+      extensions: async () =>
+        new Map([
+          [
+            EXTENSION_ID,
+            {
+              enabled: true,
+              workers: async () => [],
+            },
+          ],
+        ]),
+      targets: () => [pageTarget(session), offscreenTarget(healthyPage())],
+    } as unknown as Browser;
+
+    try {
+      const manager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await assert.rejects(manager.initialize(), error => {
+        assert.ok(error instanceof ManagedMcpError);
+        assert.strictEqual(error.code, 'BROWSER_UNSUPPORTED');
+        return true;
+      });
+      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(pageRequests, [
+        {
+          method: 'ServiceWorker.enable',
+          params: undefined,
+        },
+        {
+          method: 'ServiceWorker.startWorker',
+          params: {scopeURL: `chrome-extension://${EXTENSION_ID}/`},
+        },
+      ]);
+    } finally {
+      restoreChrome();
+      await fs.rm(tempRoot, {recursive: true, force: true});
+    }
+  });
+
+  it('requires an existing page target before waking a restored worker', async () => {
+    const {extensionPath, repositoryRoot, tempRoot} =
+      await createManagerPaths();
+    const restoreChrome = installChromeApi();
+    const rootRequests: Array<{
+      method: string;
+      params?: Record<string, unknown>;
+    }> = [];
+    const browser = {
+      _connection: {
+        send: async <T>(
+          method: string,
+          params?: Record<string, unknown>,
+        ): Promise<T> => {
+          if (method === 'Extensions.getExtensions') {
+            return {
+              extensions: [
+                {
+                  id: EXTENSION_ID,
+                  path: extensionPath,
+                  version: '1.3.2',
+                  enabled: true,
+                },
+              ],
+            } as T;
           }
-          throw new Error('ServiceWorker.startWorker unavailable');
+          rootRequests.push({method, params});
+          throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
       extensions: async () =>
@@ -687,16 +808,7 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error.code, 'BROWSER_UNSUPPORTED');
         return true;
       });
-      assert.deepStrictEqual(requests, [
-        {
-          method: 'ServiceWorker.enable',
-          params: undefined,
-        },
-        {
-          method: 'ServiceWorker.startWorker',
-          params: {scopeURL: `chrome-extension://${EXTENSION_ID}/`},
-        },
-      ]);
+      assert.deepStrictEqual(rootRequests, []);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});

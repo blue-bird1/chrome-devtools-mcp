@@ -484,9 +484,17 @@ export class ScriptCatManager {
 
   async #startManagedServiceWorker(): Promise<void> {
     try {
-      const connection = this.#connection();
-      await connection.send('ServiceWorker.enable');
-      await connection.send('ServiceWorker.startWorker', {
+      const pageTarget = this.#browser
+        .targets()
+        .find(target => target.type() === 'page');
+      if (!pageTarget) {
+        throw new Error(
+          'No existing page target is available for CDP startup.',
+        );
+      }
+      const session = await pageTarget.createCDPSession();
+      await session.send('ServiceWorker.enable');
+      await session.send('ServiceWorker.startWorker', {
         scopeURL: `chrome-extension://${this.#extensionId}/`,
       });
     } catch (error) {
