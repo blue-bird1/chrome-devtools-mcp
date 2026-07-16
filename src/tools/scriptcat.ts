@@ -10,12 +10,14 @@ import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
 
 const managedScriptCatCondition = ['managedScriptcatPath'];
+const SCRIPT_ID_MAX_LENGTH = 512;
 const idSchema = zod
   .string()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  )
-  .describe('ScriptCat script UUID.');
+  .max(SCRIPT_ID_MAX_LENGTH)
+  .refine(value => value.trim().length > 0, {
+    message: 'ScriptCat script ID must not be blank.',
+  })
+  .describe('Non-empty ScriptCat script ID.');
 
 function appendJson(
   response: {appendResponseLine(value: string): void},
