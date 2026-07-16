@@ -121,6 +121,11 @@ export const cliOptions = {
     description:
       'Absolute path to the managed unpacked ScriptCat extension. Enables managed ScriptCat tools.',
   },
+  managedScriptcatDataRoot: {
+    type: 'string',
+    description:
+      'Absolute managed ScriptCat data root containing activation-journal.json and current/scriptcat.',
+  },
   scriptcatRepositoryRoot: {
     type: 'string',
     description:
@@ -422,13 +427,14 @@ export function parseArguments(
     .check(args => {
       const managedValues = [
         args.managedScriptcatPath,
+        args.managedScriptcatDataRoot,
         args.scriptcatRepositoryRoot,
         args.scriptcatExtensionId,
       ];
       const managedCount = managedValues.filter(Boolean).length;
       if (managedCount !== 0 && managedCount !== managedValues.length) {
         throw new Error(
-          '--managed-scriptcat-path, --scriptcat-repository-root, and --scriptcat-extension-id must be provided together.',
+          '--managed-scriptcat-path, --managed-scriptcat-data-root, --scriptcat-repository-root, and --scriptcat-extension-id must be provided together.',
         );
       }
       if (
@@ -444,9 +450,6 @@ export function parseArguments(
       }
       if (args.managedScriptcatPath && !args.userDataDir) {
         throw new Error('Managed ScriptCat requires --user-data-dir.');
-      }
-      if (args.managedScriptcatPath && !args.executablePath) {
-        throw new Error('Managed ScriptCat requires --executable-path.');
       }
       return true;
     })

@@ -293,7 +293,7 @@ describe('ScriptCatManager', () => {
     }
   });
 
-  it('initializes the managed extension without redundant mutations', async () => {
+  it('initializes the managed extension without redundant mutations and propagates load errors', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const worker = readyWorker();
@@ -307,6 +307,7 @@ describe('ScriptCatManager', () => {
       [];
     let extensions = [expectedExtension];
     let userScriptsAccess = true;
+    let loadError: Error | undefined;
     const restoreChrome = installChromeApi();
     (
       globalThis as unknown as {
@@ -329,6 +330,9 @@ describe('ScriptCatManager', () => {
           }
           mutations.push({method, params});
           if (method === 'Extensions.loadUnpacked') {
+            if (loadError) {
+              throw loadError;
+            }
             extensions = [expectedExtension];
             userScriptsAccess = true;
             return {id: EXTENSION_ID} as T;
@@ -467,6 +471,20 @@ describe('ScriptCatManager', () => {
         });
         assert.deepStrictEqual(mutations, []);
       }
+
+      const protocolError = new Error('load unpacked failed');
+      extensions = [];
+      loadError = protocolError;
+      const failedManager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await assert.rejects(failedManager.initialize(), error => {
+        assert.strictEqual(error, protocolError);
+        return true;
+      });
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});

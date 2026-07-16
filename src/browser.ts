@@ -11,9 +11,9 @@ import path from 'node:path';
 
 import {logger} from './logger.js';
 import {
-  assertManagedReleaseConsistency,
-  type ManagedReleaseConsistencyOptions,
-} from './ManagedReleaseConsistency.js';
+  assertManagedExtensionConsistency,
+  type ManagedExtensionConsistencyOptions,
+} from './ManagedExtensionConsistency.js';
 import {
   acquireProfileLock,
   bindProfileLockToBrowser,
@@ -179,7 +179,7 @@ interface McpLaunchOptions {
   blocklist?: string[];
   allowlist?: string[];
   profileLock?: boolean;
-  managedReleaseConsistency?: ManagedReleaseConsistencyOptions;
+  managedExtensionConsistency?: ManagedExtensionConsistencyOptions;
 }
 
 export function detectDisplay(): void {
@@ -327,9 +327,9 @@ export async function ensureBrowserLaunched(
         await acquireProfileLock(options.userDataDir, profileLockOwner);
         profileLockAcquired = true;
       }
-      if (options.managedReleaseConsistency) {
-        await assertManagedReleaseConsistency(
-          options.managedReleaseConsistency,
+      if (options.managedExtensionConsistency) {
+        await assertManagedExtensionConsistency(
+          options.managedExtensionConsistency,
         );
       }
       launched = await launch(options);

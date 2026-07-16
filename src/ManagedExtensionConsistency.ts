@@ -17,62 +17,31 @@ import {
 
 const ACTIVATION_JOURNAL_FILENAME = 'activation-journal.json';
 
-export interface ManagedReleaseConsistencyOptions {
-  mcpEntrypointPath: string;
-  browserExecutablePath: string;
+export interface ManagedExtensionConsistencyOptions {
+  dataRoot: string;
   extensionPath: string;
-}
-
-interface CanonicalReleasePath {
-  path: string;
-  releaseRoot: string;
 }
 
 type PhysicalTreeEntry = {type: 'directory'} | {type: 'file'; digest: string};
 
-export async function assertManagedReleaseConsistency(
-  options: ManagedReleaseConsistencyOptions,
+export async function assertManagedExtensionConsistency(
+  options: ManagedExtensionConsistencyOptions,
 ): Promise<void> {
   try {
-    const mcpEntrypoint = await canonicalReleasePath(
-      'MCP entrypoint',
-      options.mcpEntrypointPath,
-    );
-    const dataRoot = path.dirname(path.dirname(mcpEntrypoint.releaseRoot));
-    await assertActivationComplete(dataRoot);
-
-    const [browserExecutable, current, managedExtension] = await Promise.all([
-      canonicalReleasePath('browser executable', options.browserExecutablePath),
-      canonicalReleasePath(
-        'managed data current link',
-        path.join(dataRoot, 'current'),
+    await assertActivationComplete(options.dataRoot);
+    const [activeExtension, managedExtension] = await Promise.all([
+      canonicalActiveExtension(
+        'active ScriptCat extension',
+        path.join(options.dataRoot, 'current', 'scriptcat'),
       ),
       canonicalPhysicalDirectory(
         'managed ScriptCat extension',
         options.extensionPath,
       ),
     ]);
-    const expectedReleaseRoot = mcpEntrypoint.releaseRoot;
-    if (
-      current.path !== current.releaseRoot ||
-      browserExecutable.releaseRoot !== expectedReleaseRoot ||
-      current.releaseRoot !== expectedReleaseRoot
-    ) {
+    if (!(await physicalTreesMatch(activeExtension, managedExtension))) {
       throw releaseMismatch({
-        mcpEntrypoint,
-        browserExecutable,
-        current,
-        managedExtension,
-      });
-    }
-
-    const releaseExtension = await canonicalPhysicalDirectory(
-      'active release ScriptCat extension',
-      path.join(current.releaseRoot, 'scriptcat'),
-    );
-    if (!(await physicalTreesMatch(releaseExtension, managedExtension))) {
-      throw releaseMismatch({
-        releaseExtension,
+        activeExtension,
         managedExtension,
       });
     }
@@ -86,8 +55,7 @@ export async function assertManagedReleaseConsistency(
     }
     throw releaseMismatch(
       {
-        mcpEntrypointPath: options.mcpEntrypointPath,
-        browserExecutablePath: options.browserExecutablePath,
+        dataRoot: options.dataRoot,
         extensionPath: options.extensionPath,
       },
       error,
@@ -108,22 +76,16 @@ async function assertActivationComplete(dataRoot: string): Promise<void> {
   throw activationIncomplete(journalPath);
 }
 
-async function canonicalReleasePath(
+async function canonicalActiveExtension(
   label: string,
   inputPath: string,
-): Promise<CanonicalReleasePath> {
+): Promise<string> {
   const canonicalPath = await fs.realpath(inputPath);
-  let candidate = canonicalPath;
-  while (true) {
-    const parent = path.dirname(candidate);
-    if (path.basename(parent) === 'releases') {
-      return {path: canonicalPath, releaseRoot: candidate};
-    }
-    if (parent === candidate) {
-      throw new Error(`${label} is not inside a managed release.`);
-    }
-    candidate = parent;
+  const status = await fs.lstat(canonicalPath);
+  if (!status.isDirectory()) {
+    throw new Error(`${label} is not a directory.`);
   }
+  return canonicalPath;
 }
 
 async function canonicalPhysicalDirectory(

@@ -552,22 +552,14 @@ export class ScriptCatManager {
 
   async #loadManagedExtension(): Promise<void> {
     const connection = this.#connection();
-    let response: RawLoadUnpackedResponse;
-    try {
-      response = await connection.send<RawLoadUnpackedResponse>(
-        'Extensions.loadUnpacked',
-        {
-          path: this.#extensionPath,
-          expectedId: this.#extensionId,
-          userScriptsAccess: true,
-        },
-      );
-    } catch (error) {
-      throw this.#notReady('Failed to load the managed ScriptCat extension.', {
-        extensionPath: this.#extensionPath,
-        cause: error,
-      });
-    }
+    const response = await connection.send<RawLoadUnpackedResponse>(
+      'Extensions.loadUnpacked',
+      {
+        path: this.#extensionPath,
+        expectedId: this.#extensionId,
+        userScriptsAccess: true,
+      },
+    );
     if (response.id !== undefined && response.id !== this.#extensionId) {
       throw this.#notReady(
         'The managed ScriptCat extension ID does not match the pinned ID.',

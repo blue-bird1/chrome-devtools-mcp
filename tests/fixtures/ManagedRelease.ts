@@ -4,8 +4,6 @@ import path from 'node:path';
 
 export interface ManagedReleasePaths {
   root: string;
-  mcpEntrypointPath: string;
-  browserExecutablePath: string;
   extensionPath: string;
   releaseExtensionPath: string;
 }
@@ -59,18 +57,6 @@ async function createRelease(
   releaseId: string,
 ): Promise<ManagedReleasePaths> {
   const root = path.join(dataRoot, 'releases', releaseId);
-  const mcpEntrypointPath = path.join(
-    root,
-    'mcp',
-    'bin',
-    'chrome-devtools-mcp.js',
-  );
-  const browserExecutablePath = path.join(
-    root,
-    'chromium',
-    'chrome-linux',
-    'chrome',
-  );
   const releaseExtensionPath = path.join(root, 'scriptcat');
   const extensionBundlePath = path.join(
     releaseExtensionPath,
@@ -78,14 +64,10 @@ async function createRelease(
     'service-worker.js',
   );
   await Promise.all([
-    fs.mkdir(path.dirname(mcpEntrypointPath), {recursive: true}),
-    fs.mkdir(path.dirname(browserExecutablePath), {recursive: true}),
     fs.mkdir(path.dirname(extensionBundlePath), {recursive: true}),
     fs.mkdir(path.join(releaseExtensionPath, 'empty'), {recursive: true}),
   ]);
   await Promise.all([
-    fs.writeFile(mcpEntrypointPath, 'export {};\n'),
-    fs.writeFile(browserExecutablePath, ''),
     fs.writeFile(
       path.join(releaseExtensionPath, 'manifest.json'),
       `${releaseId}\n`,
@@ -94,8 +76,6 @@ async function createRelease(
   ]);
   return {
     root,
-    mcpEntrypointPath,
-    browserExecutablePath,
     extensionPath,
     releaseExtensionPath,
   };

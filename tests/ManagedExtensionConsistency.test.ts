@@ -9,18 +9,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
+import {assertManagedExtensionConsistency} from '../src/ManagedExtensionConsistency.js';
 import {
   ACTIVATION_INCOMPLETE_ERROR_CODE,
   ManagedMcpError,
   RELEASE_MISMATCH_ERROR_CODE,
 } from '../src/ManagedMcpError.js';
-import {assertManagedReleaseConsistency} from '../src/ManagedReleaseConsistency.js';
 
 import {createManagedReleaseFixture} from './fixtures/ManagedRelease.js';
-import type {
-  ManagedReleaseFixture,
-  ManagedReleasePaths,
-} from './fixtures/ManagedRelease.js';
+import type {ManagedReleaseFixture} from './fixtures/ManagedRelease.js';
 
 const ACTIVATION_JOURNAL_FILENAME = 'activation-journal.json';
 const EXTENSION_MANIFEST_FILENAME = 'manifest.json';
@@ -40,63 +37,30 @@ async function assertGateError(
   });
 }
 
-describe('managed release consistency', () => {
-  it('accepts a physical extension matching the canonical current release', async () => {
+describe('managed extension consistency', () => {
+  it('accepts a physical extension matching the active current extension', async () => {
     const fixture = await createManagedReleaseFixture();
     try {
-      await assertManagedReleaseConsistency(fixture.releaseA);
+      await assertManagedExtensionConsistency({
+        dataRoot: fixture.dataRoot,
+        extensionPath: fixture.extensionPath,
+      });
     } finally {
       await fixture.cleanup();
     }
   });
 
-  const mismatchCases = [
-    {
-      name: 'MCP entrypoint',
-      currentRelease: 'release-a',
-      paths: (
-        releaseA: ManagedReleasePaths,
-        releaseB: ManagedReleasePaths,
-      ) => ({
-        ...releaseA,
-        mcpEntrypointPath: releaseB.mcpEntrypointPath,
-      }),
-    },
-    {
-      name: 'browser executable',
-      currentRelease: 'release-a',
-      paths: (
-        releaseA: ManagedReleasePaths,
-        releaseB: ManagedReleasePaths,
-      ) => ({
-        ...releaseA,
-        browserExecutablePath: releaseB.browserExecutablePath,
-      }),
-    },
-    {
-      name: 'current release',
-      currentRelease: 'release-b',
-      paths: (releaseA: ManagedReleasePaths) => releaseA,
-    },
-  ];
-
-  for (const mismatchCase of mismatchCases) {
-    it(`rejects a mismatched ${mismatchCase.name}`, async () => {
-      const fixture = await createManagedReleaseFixture(
-        mismatchCase.currentRelease,
-      );
-      try {
-        await assertGateError(
-          assertManagedReleaseConsistency(
-            mismatchCase.paths(fixture.releaseA, fixture.releaseB),
-          ),
-          RELEASE_MISMATCH_ERROR_CODE,
-        );
-      } finally {
-        await fixture.cleanup();
-      }
-    });
-  }
+  it('accepts the managed extension from the active current release', async () => {
+    const fixture = await createManagedReleaseFixture('release-b');
+    try {
+      await assertManagedExtensionConsistency({
+        dataRoot: fixture.dataRoot,
+        extensionPath: fixture.extensionPath,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 
   it('rejects startup while an activation journal exists', async () => {
     const fixture = await createManagedReleaseFixture();
@@ -106,7 +70,10 @@ describe('managed release consistency', () => {
         '{}\n',
       );
       await assertGateError(
-        assertManagedReleaseConsistency(fixture.releaseA),
+        assertManagedExtensionConsistency({
+          dataRoot: fixture.dataRoot,
+          extensionPath: fixture.extensionPath,
+        }),
         ACTIVATION_INCOMPLETE_ERROR_CODE,
       );
     } finally {
@@ -149,7 +116,10 @@ describe('managed release consistency', () => {
       try {
         await mismatchCase.mutate(fixture);
         await assertGateError(
-          assertManagedReleaseConsistency(fixture.releaseA),
+          assertManagedExtensionConsistency({
+            dataRoot: fixture.dataRoot,
+            extensionPath: fixture.extensionPath,
+          }),
           RELEASE_MISMATCH_ERROR_CODE,
         );
       } finally {
@@ -168,7 +138,10 @@ describe('managed release consistency', () => {
         'dir',
       );
       await assertGateError(
-        assertManagedReleaseConsistency(fixture.releaseA),
+        assertManagedExtensionConsistency({
+          dataRoot: fixture.dataRoot,
+          extensionPath: fixture.extensionPath,
+        }),
         RELEASE_MISMATCH_ERROR_CODE,
       );
     } finally {
@@ -189,7 +162,10 @@ describe('managed release consistency', () => {
         managedBundle,
       );
       await assertGateError(
-        assertManagedReleaseConsistency(fixture.releaseA),
+        assertManagedExtensionConsistency({
+          dataRoot: fixture.dataRoot,
+          extensionPath: fixture.extensionPath,
+        }),
         RELEASE_MISMATCH_ERROR_CODE,
       );
     } finally {

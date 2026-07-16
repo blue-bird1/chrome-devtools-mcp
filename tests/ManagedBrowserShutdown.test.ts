@@ -270,6 +270,32 @@ async function cleanupManagedBrowser(
 }
 
 describe('managed browser shutdown', () => {
+  it('launches a browser outside the active release after extension consistency passes', async () => {
+    const fixture = await createManagedReleaseFixture();
+    const profile = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'scriptcat-external-browser-profile-'),
+    );
+    try {
+      const browser = await ensureBrowserLaunched({
+        headless: true,
+        isolated: false,
+        userDataDir: profile,
+        executablePath: await executablePath(),
+        devtools: false,
+        profileLock: true,
+        managedExtensionConsistency: {
+          dataRoot: fixture.dataRoot,
+          extensionPath: fixture.extensionPath,
+        },
+      });
+      assert.strictEqual(browser.connected, true);
+    } finally {
+      await closeBrowser();
+      await fixture.cleanup();
+      await fs.rm(profile, {recursive: true, force: true});
+    }
+  });
+
   it('releases the profile lock without launching Chrome during an incomplete activation', async () => {
     const fixture = await createManagedReleaseFixture();
     const profile = await fs.mkdtemp(
@@ -286,10 +312,13 @@ describe('managed browser shutdown', () => {
           headless: true,
           isolated: false,
           userDataDir: profile,
-          executablePath: fixture.releaseA.browserExecutablePath,
+          executablePath: '/outside-managed-release/chrome',
           devtools: false,
           profileLock: true,
-          managedReleaseConsistency: fixture.releaseA,
+          managedExtensionConsistency: {
+            dataRoot: fixture.dataRoot,
+            extensionPath: fixture.extensionPath,
+          },
         }),
         error => {
           assert.ok(error instanceof ManagedMcpError);
@@ -323,10 +352,13 @@ describe('managed browser shutdown', () => {
           headless: true,
           isolated: false,
           userDataDir: profile,
-          executablePath: fixture.releaseA.browserExecutablePath,
+          executablePath: '/outside-managed-release/chrome',
           devtools: false,
           profileLock: true,
-          managedReleaseConsistency: fixture.releaseA,
+          managedExtensionConsistency: {
+            dataRoot: fixture.dataRoot,
+            extensionPath: fixture.extensionPath,
+          },
         }),
         error => {
           assert.ok(error instanceof ManagedMcpError);

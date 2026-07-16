@@ -90,6 +90,7 @@ describe('cli args parsing', () => {
         '--executable-path=/opt/chrome/chrome',
         '--user-data-dir=/tmp/scriptcat-profile',
         '--managed-scriptcat-path=/opt/scriptcat',
+        '--managed-scriptcat-data-root=/var/lib/scriptcat-mcp',
         '--scriptcat-repository-root=/work/scriptcat',
         '--scriptcat-extension-id=ckchkcgpbkhleahkgkbiiikpcjdbopje',
       ],
@@ -117,7 +118,7 @@ describe('cli args parsing', () => {
     );
   });
 
-  it('requires an explicit browser executable for managed ScriptCat', () => {
+  it('requires an explicit managed data root for managed ScriptCat', () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -130,7 +131,10 @@ describe('cli args parsing', () => {
       {encoding: 'utf8'},
     );
     assert.strictEqual(result.status, 1);
-    assert.match(result.stderr, /Managed ScriptCat requires --executable-path/);
+    assert.match(
+      result.stderr,
+      /managed-scriptcat-data-root.*must be provided together/,
+    );
   });
 
   it('parses an empty browser url', async () => {
