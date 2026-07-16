@@ -34,6 +34,7 @@ export async function createMcpServer(
   serverArgs: ReturnType<typeof parseArguments>,
   options: {
     logFile?: fs.WriteStream;
+    mcpEntrypointPath?: string;
   },
 ) {
   if (serverArgs.usageStatistics) {
@@ -141,6 +142,13 @@ export async function createMcpServer(
             blocklist,
             allowlist,
             profileLock: Boolean(serverArgs.managedScriptcatPath),
+            managedReleaseConsistency: serverArgs.managedScriptcatPath
+              ? {
+                  mcpEntrypointPath: options.mcpEntrypointPath ?? '',
+                  browserExecutablePath: serverArgs.executablePath ?? '',
+                  extensionPath: serverArgs.managedScriptcatPath,
+                }
+              : undefined,
           });
 
     if (context?.browser !== browser) {

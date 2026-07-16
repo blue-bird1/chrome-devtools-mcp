@@ -445,6 +445,9 @@ export function parseArguments(
       if (args.managedScriptcatPath && !args.userDataDir) {
         throw new Error('Managed ScriptCat requires --user-data-dir.');
       }
+      if (args.managedScriptcatPath && !args.executablePath) {
+        throw new Error('Managed ScriptCat requires --executable-path.');
+      }
       return true;
     })
     .example([

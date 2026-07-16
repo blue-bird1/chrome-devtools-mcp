@@ -12,6 +12,7 @@ import {pathToFileURL} from 'node:url';
 import {
   MANAGED_EXTENSION_PROTECTED_ERROR_CODE,
   ManagedMcpError,
+  RELEASE_MISMATCH_ERROR_CODE,
 } from './ManagedMcpError.js';
 import {ScriptCatBackend} from './ScriptCatBackend.js';
 import type {Browser, Extension} from './third_party/index.js';
@@ -90,8 +91,68 @@ export interface ScriptCatManagerOptions {
   timeout: number;
 }
 
+export interface ManagedReleaseConsistencyOptions {
+  mcpEntrypointPath: string;
+  browserExecutablePath: string;
+  extensionPath: string;
+}
+
+interface CanonicalReleasePath {
+  path: string;
+  releaseRoot: string;
+}
+
 export type ManagedExtensionMutation =
   'install' | 'reload' | 'uninstall' | 'disable-user-scripts';
+
+export async function assertManagedReleaseConsistency(
+  options: ManagedReleaseConsistencyOptions,
+): Promise<void> {
+  try {
+    const [mcpEntrypoint, browserExecutable, extension] = await Promise.all([
+      canonicalReleasePath('MCP entrypoint', options.mcpEntrypointPath),
+      canonicalReleasePath('browser executable', options.browserExecutablePath),
+      canonicalReleasePath(
+        'managed ScriptCat extension',
+        options.extensionPath,
+      ),
+    ]);
+    const dataRoot = path.dirname(path.dirname(mcpEntrypoint.releaseRoot));
+    const current = await canonicalReleasePath(
+      'managed data current link',
+      path.join(dataRoot, 'current'),
+    );
+    const expectedReleaseRoot = mcpEntrypoint.releaseRoot;
+    if (
+      current.path !== current.releaseRoot ||
+      browserExecutable.releaseRoot !== expectedReleaseRoot ||
+      extension.releaseRoot !== expectedReleaseRoot ||
+      current.releaseRoot !== expectedReleaseRoot
+    ) {
+      throw releaseMismatch({
+        mcpEntrypoint,
+        browserExecutable,
+        extension,
+        current,
+      });
+    }
+  } catch (error) {
+    if (
+      error instanceof ManagedMcpError &&
+      error.code === RELEASE_MISMATCH_ERROR_CODE
+    ) {
+      throw error;
+    }
+    throw releaseMismatch(
+      {
+        mcpEntrypointPath: options.mcpEntrypointPath,
+        browserExecutablePath: options.browserExecutablePath,
+        extensionPath: options.extensionPath,
+      },
+      error,
+    );
+  }
+}
 
 export async function setExtensionUserScriptsAccess(
   browser: Browser,
@@ -116,6 +177,36 @@ export async function setExtensionUserScriptsAccess(
       {cause: error},
     );
   }
+}
+
+async function canonicalReleasePath(
+  label: string,
+  inputPath: string,
+): Promise<CanonicalReleasePath> {
+  const canonicalPath = await fs.realpath(inputPath);
+  let candidate = canonicalPath;
+  while (true) {
+    const parent = path.dirname(candidate);
+    if (path.basename(parent) === 'releases') {
+      return {path: canonicalPath, releaseRoot: candidate};
+    }
+    if (parent === candidate) {
+      throw new Error(`${label} is not inside a managed release.`);
+    }
+    candidate = parent;
+  }
+}
+
+function releaseMismatch(
+  details: Record<string, unknown>,
+  cause?: unknown,
+): ManagedMcpError {
+  return new ManagedMcpError(
+    RELEASE_MISMATCH_ERROR_CODE,
+    'Managed MCP components do not resolve to the same active release.',
+    details,
+    cause === undefined ? undefined : {cause},
+  );
 }
 
 export class ScriptCatManager {

@@ -16,6 +16,10 @@ import {
   type ProfileLockOwner,
   releaseProfileLock,
 } from './ProfileLock.js';
+import {
+  assertManagedReleaseConsistency,
+  type ManagedReleaseConsistencyOptions,
+} from './ScriptCatManager.js';
 import type {
   Browser,
   ChromeReleaseChannel,
@@ -175,6 +179,7 @@ interface McpLaunchOptions {
   blocklist?: string[];
   allowlist?: string[];
   profileLock?: boolean;
+  managedReleaseConsistency?: ManagedReleaseConsistencyOptions;
 }
 
 export function detectDisplay(): void {
@@ -321,6 +326,11 @@ export async function ensureBrowserLaunched(
         }
         await acquireProfileLock(options.userDataDir, profileLockOwner);
         profileLockAcquired = true;
+      }
+      if (options.managedReleaseConsistency) {
+        await assertManagedReleaseConsistency(
+          options.managedReleaseConsistency,
+        );
       }
       launched = await launch(options);
       if (profileLockAcquired) {

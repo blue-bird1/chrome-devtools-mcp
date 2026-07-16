@@ -7,6 +7,7 @@
 import '../polyfill.js';
 
 import process from 'node:process';
+import {fileURLToPath} from 'node:url';
 
 import {closeBrowserWithBackstop} from '../browser.js';
 import {createMcpServer, logDisclaimers} from '../index.js';
@@ -68,6 +69,7 @@ process.on('SIGHUP', () => {
 logger?.(`Starting Chrome DevTools MCP Server v${VERSION}`);
 const {server} = await createMcpServer(args, {
   logFile,
+  mcpEntrypointPath: fileURLToPath(import.meta.url),
 });
 const transport = new StdioServerTransport();
 await server.connect(transport);

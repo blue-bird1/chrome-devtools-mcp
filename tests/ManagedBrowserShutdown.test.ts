@@ -15,18 +15,25 @@ import {describe, it} from 'node:test';
 import {fileURLToPath} from 'node:url';
 
 import {executablePath} from 'puppeteer';
+import sinon from 'sinon';
 
 import {
   closeBrowser,
   closeBrowserWithBackstop,
   ensureBrowserLaunched,
 } from '../src/browser.js';
-import {ManagedMcpError} from '../src/ManagedMcpError.js';
+import {
+  ManagedMcpError,
+  RELEASE_MISMATCH_ERROR_CODE,
+} from '../src/ManagedMcpError.js';
 import {
   acquireProfileLock,
   PROFILE_LOCK_FILENAME,
   releaseProfileLock,
 } from '../src/ProfileLock.js';
+import {puppeteer} from '../src/third_party/index.js';
+
+import {createManagedReleaseFixture} from './fixtures/ManagedRelease.js';
 
 const CLOSE_TEST_TIMEOUT_MS = 10_000;
 const OWNER_READY_TIMEOUT_MS = 15_000;
@@ -263,6 +270,41 @@ async function cleanupManagedBrowser(
 }
 
 describe('managed browser shutdown', () => {
+  it('releases the profile lock without launching Chrome on a release mismatch', async () => {
+    const fixture = await createManagedReleaseFixture();
+    const profile = await fs.mkdtemp(
+      path.join(os.tmpdir(), 'scriptcat-release-mismatch-profile-'),
+    );
+    const launch = sinon.stub(puppeteer, 'launch');
+    try {
+      await assert.rejects(
+        ensureBrowserLaunched({
+          headless: true,
+          isolated: false,
+          userDataDir: profile,
+          executablePath: fixture.releaseB.browserExecutablePath,
+          devtools: false,
+          profileLock: true,
+          managedReleaseConsistency: {
+            ...fixture.releaseA,
+            browserExecutablePath: fixture.releaseB.browserExecutablePath,
+          },
+        }),
+        error => {
+          assert.ok(error instanceof ManagedMcpError);
+          assert.strictEqual(error.code, RELEASE_MISMATCH_ERROR_CODE);
+          return true;
+        },
+      );
+      sinon.assert.notCalled(launch);
+      assert.strictEqual(await profileLockIsAvailable(profile), true);
+    } finally {
+      launch.restore();
+      await fixture.cleanup();
+      await fs.rm(profile, {recursive: true, force: true});
+    }
+  });
+
   it('keeps the profile owned after SIGKILL until Chrome is reaped without orphans', async () => {
     const profile = await fs.mkdtemp(
       path.join(os.tmpdir(), 'scriptcat-abrupt-browser-owner-'),

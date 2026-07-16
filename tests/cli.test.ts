@@ -117,6 +117,22 @@ describe('cli args parsing', () => {
     );
   });
 
+  it('requires an explicit browser executable for managed ScriptCat', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        'build/src/bin/chrome-devtools-mcp.js',
+        '--user-data-dir=/tmp/scriptcat-profile',
+        '--managed-scriptcat-path=/opt/scriptcat',
+        '--scriptcat-repository-root=/work/scriptcat',
+        '--scriptcat-extension-id=ckchkcgpbkhleahkgkbiiikpcjdbopje',
+      ],
+      {encoding: 'utf8'},
+    );
+    assert.strictEqual(result.status, 1);
+    assert.match(result.stderr, /Managed ScriptCat requires --executable-path/);
+  });
+
   it('parses an empty browser url', async () => {
     const args = parseArguments(
       '1.0.0',

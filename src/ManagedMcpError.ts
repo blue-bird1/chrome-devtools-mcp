@@ -6,6 +6,7 @@
 
 export const MANAGED_EXTENSION_PROTECTED_ERROR_CODE =
   'MANAGED_EXTENSION_PROTECTED' as const;
+export const RELEASE_MISMATCH_ERROR_CODE = 'RELEASE_MISMATCH' as const;
 
 export type ManagedMcpErrorCode =
   | 'PROFILE_BUSY'
@@ -13,6 +14,7 @@ export type ManagedMcpErrorCode =
   | 'EXTENSION_NOT_READY'
   | 'INVALID_USERSCRIPT'
   | typeof MANAGED_EXTENSION_PROTECTED_ERROR_CODE
+  | typeof RELEASE_MISMATCH_ERROR_CODE
   | 'SCRIPT_NOT_FOUND'
   | 'TIMEOUT';
 
