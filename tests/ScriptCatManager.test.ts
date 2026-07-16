@@ -11,7 +11,10 @@ import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {ManagedMcpError} from '../src/ManagedMcpError.js';
-import {ScriptCatManager} from '../src/ScriptCatManager.js';
+import {
+  SCRIPT_CAT_STARTUP_ACTION,
+  ScriptCatManager,
+} from '../src/ScriptCatManager.js';
 import type {Browser, Page, Target} from '../src/third_party/index.js';
 
 const EXTENSION_ID = 'ckchkcgpbkhleahkgkbiiikpcjdbopje';
@@ -89,6 +92,10 @@ async function createManagerPaths(): Promise<{
   const extensionPath = path.join(tempRoot, 'extension');
   const repositoryRoot = path.join(tempRoot, 'repository');
   await Promise.all([fs.mkdir(extensionPath), fs.mkdir(repositoryRoot)]);
+  await fs.writeFile(
+    path.join(extensionPath, 'manifest.json'),
+    JSON.stringify({version: '1.3.2'}),
+  );
   return {extensionPath, repositoryRoot, tempRoot};
 }
 
@@ -130,9 +137,12 @@ describe('ScriptCatManager', () => {
     const repositoryRoot = path.join(tempRoot, 'repository');
     const outsidePath = path.join(tempRoot, 'outside.user.js');
     const escapedPath = path.join(repositoryRoot, 'escaped.user.js');
+    await Promise.all([fs.mkdir(extensionPath), fs.mkdir(repositoryRoot)]);
     await Promise.all([
-      fs.mkdir(extensionPath),
-      fs.mkdir(repositoryRoot),
+      fs.writeFile(
+        path.join(extensionPath, 'manifest.json'),
+        JSON.stringify({version: '1.3.2'}),
+      ),
       fs.writeFile(
         outsidePath,
         '// ==UserScript==\n// @name Outside\n// ==/UserScript==\n',
@@ -283,23 +293,52 @@ describe('ScriptCatManager', () => {
     }
   });
 
-  it('grants userScripts access before reloading the managed extension', async () => {
+  it('initializes the managed extension without redundant mutations', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
-    const restoreChrome = installChromeApi();
     const worker = readyWorker();
-    const events: string[] = [];
-    let installCount = 0;
+    const expectedExtension = {
+      id: EXTENSION_ID,
+      path: extensionPath,
+      version: '1.3.2',
+      enabled: true,
+    };
+    const mutations: Array<{method: string; params?: Record<string, unknown>}> =
+      [];
+    let extensions = [expectedExtension];
+    let userScriptsAccess = true;
+    const restoreChrome = installChromeApi();
+    (
+      globalThis as unknown as {
+        chrome: {userScripts: {getScripts: () => Promise<unknown>}};
+      }
+    ).chrome.userScripts.getScripts = async () => {
+      if (!userScriptsAccess) {
+        throw new Error('userScripts access disabled');
+      }
+      return [];
+    };
     const browser = {
       _connection: {
-        send: async (): Promise<void> => {
-          events.push('grant');
+        send: async <T>(
+          method: string,
+          params?: Record<string, unknown>,
+        ): Promise<T> => {
+          if (method === 'Extensions.getExtensions') {
+            return {extensions} as T;
+          }
+          mutations.push({method, params});
+          if (method === 'Extensions.loadUnpacked') {
+            extensions = [expectedExtension];
+            userScriptsAccess = true;
+            return {id: EXTENSION_ID} as T;
+          }
+          if (method === 'Extensions.setUserScriptsAccess') {
+            userScriptsAccess = params?.enabled === true;
+            return undefined as T;
+          }
+          throw new Error(`Unexpected CDP method: ${method}`);
         },
-      },
-      installExtension: async (): Promise<string> => {
-        installCount += 1;
-        events.push(installCount === 1 ? 'install' : 'reload');
-        return EXTENSION_ID;
       },
       extensions: readyExtension(worker),
       targets: () => [
@@ -316,7 +355,118 @@ describe('ScriptCatManager', () => {
         timeout: 1_000,
       });
       await manager.initialize();
-      assert.deepStrictEqual(events, ['install', 'grant', 'reload']);
+      assert.deepStrictEqual(mutations, []);
+      assert.deepStrictEqual(
+        {
+          startupAction: (await manager.status()).startupAction,
+          installCount: (await manager.status()).installCount,
+          accessRepairCount: (await manager.status()).accessRepairCount,
+        },
+        {
+          startupAction: SCRIPT_CAT_STARTUP_ACTION.EXISTING,
+          installCount: 0,
+          accessRepairCount: 0,
+        },
+      );
+
+      extensions = [];
+      const missingManager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await missingManager.initialize();
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
+      assert.deepStrictEqual(
+        {
+          startupAction: (await missingManager.status()).startupAction,
+          installCount: (await missingManager.status()).installCount,
+          accessRepairCount: (await missingManager.status()).accessRepairCount,
+        },
+        {
+          startupAction: SCRIPT_CAT_STARTUP_ACTION.LOADED,
+          installCount: 1,
+          accessRepairCount: 0,
+        },
+      );
+
+      mutations.length = 0;
+      userScriptsAccess = false;
+      const accessManager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await accessManager.initialize();
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.setUserScriptsAccess',
+          params: {id: EXTENSION_ID, enabled: true},
+        },
+      ]);
+      assert.deepStrictEqual(
+        {
+          startupAction: (await accessManager.status()).startupAction,
+          installCount: (await accessManager.status()).installCount,
+          accessRepairCount: (await accessManager.status()).accessRepairCount,
+        },
+        {
+          startupAction: SCRIPT_CAT_STARTUP_ACTION.ACCESS_REPAIRED,
+          installCount: 0,
+          accessRepairCount: 1,
+        },
+      );
+
+      mutations.length = 0;
+      extensions = [{...expectedExtension, enabled: false}];
+      const disabledManager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await assert.rejects(disabledManager.initialize(), error => {
+        assert.ok(error instanceof ManagedMcpError);
+        assert.strictEqual(error.code, 'EXTENSION_NOT_READY');
+        return true;
+      });
+      assert.deepStrictEqual(mutations, []);
+
+      for (const invalidExtensions of [
+        [{...expectedExtension, id: 'unexpected-extension-id'}],
+        [{...expectedExtension, path: path.join(extensionPath, 'unexpected')}],
+        [{...expectedExtension, version: '1.3.3'}],
+        [
+          expectedExtension,
+          {...expectedExtension, id: 'duplicate-extension-id'},
+        ],
+      ]) {
+        mutations.length = 0;
+        extensions = invalidExtensions;
+        const invalidManager = await ScriptCatManager.create(browser, {
+          extensionPath,
+          extensionId: EXTENSION_ID,
+          repositoryRoot,
+          timeout: 1_000,
+        });
+        await assert.rejects(invalidManager.initialize(), error => {
+          assert.ok(error instanceof ManagedMcpError);
+          assert.strictEqual(error.code, 'EXTENSION_NOT_READY');
+          return true;
+        });
+        assert.deepStrictEqual(mutations, []);
+      }
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});

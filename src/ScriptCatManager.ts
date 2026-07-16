@@ -30,9 +30,34 @@ const ACTIONS = {
 
 interface RawCdpBrowser extends Browser {
   _connection?: {
-    send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+    send<T>(method: string, params?: Record<string, unknown>): Promise<T>;
   };
 }
+
+interface RawExtension {
+  id: string;
+  path: string;
+  version: string;
+  enabled: boolean;
+}
+
+interface RawExtensionsResponse {
+  extensions: RawExtension[];
+}
+
+interface RawLoadUnpackedResponse {
+  id?: string;
+}
+
+export const SCRIPT_CAT_STARTUP_ACTION = {
+  NOT_INITIALIZED: 'not-initialized',
+  EXISTING: 'existing',
+  LOADED: 'loaded',
+  ACCESS_REPAIRED: 'access-repaired',
+} as const;
+
+export type ScriptCatStartupAction =
+  (typeof SCRIPT_CAT_STARTUP_ACTION)[keyof typeof SCRIPT_CAT_STARTUP_ACTION];
 
 interface ScriptCatRecord {
   uuid: string;
@@ -58,6 +83,9 @@ export interface ScriptCatStatus {
   userScriptsAccessEnabled: boolean | null;
   backendTransportReady: boolean;
   repositoryRoot: string;
+  startupAction: ScriptCatStartupAction;
+  installCount: number;
+  accessRepairCount: number;
 }
 
 export interface ScriptCatScriptSummary {
@@ -125,18 +153,25 @@ export class ScriptCatManager {
   readonly #repositoryRoot: string;
   readonly #timeout: number;
   readonly #backend: ScriptCatBackend;
+  readonly #extensionVersion: string;
+  #startupAction: ScriptCatStartupAction =
+    SCRIPT_CAT_STARTUP_ACTION.NOT_INITIALIZED;
+  #installCount = 0;
+  #accessRepairCount = 0;
 
   private constructor(
     browser: Browser,
     options: ScriptCatManagerOptions,
     extensionPath: string,
     repositoryRoot: string,
+    extensionVersion: string,
   ) {
     this.#browser = browser;
     this.#extensionPath = extensionPath;
     this.#extensionId = options.extensionId;
     this.#repositoryRoot = repositoryRoot;
     this.#timeout = options.timeout;
+    this.#extensionVersion = extensionVersion;
     this.#backend = new ScriptCatBackend(
       browser,
       options.extensionId,
@@ -152,45 +187,45 @@ export class ScriptCatManager {
       canonicalDirectory(options.extensionPath, 'managed ScriptCat extension'),
       canonicalDirectory(options.repositoryRoot, 'ScriptCat repository root'),
     ]);
+    const extensionVersion = await manifestVersion(extensionPath);
     return new ScriptCatManager(
       browser,
       options,
       extensionPath,
       repositoryRoot,
+      extensionVersion,
     );
   }
 
   async initialize(): Promise<void> {
-    let installedId: string;
-    try {
-      installedId = await this.#browser.installExtension(this.#extensionPath);
-    } catch (error) {
-      throw new ManagedMcpError(
-        'EXTENSION_NOT_READY',
-        'Failed to load the managed ScriptCat extension.',
-        {extensionPath: this.#extensionPath},
-        {cause: error},
+    let extension = this.#findManagedExtension(await this.#getExtensions());
+    if (!extension) {
+      await this.#loadManagedExtension();
+      this.#installCount += 1;
+      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.LOADED;
+      extension = this.#findManagedExtension(await this.#getExtensions());
+      if (!extension) {
+        throw this.#notReady('The managed ScriptCat extension was not loaded.');
+      }
+    } else {
+      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.EXISTING;
+    }
+    this.#assertManagedExtension(extension);
+
+    const accessEnabled = await this.#backend.userScriptsAccessEnabled();
+    if (accessEnabled === null) {
+      throw this.#notReady(
+        'The managed ScriptCat service worker is unavailable for access verification.',
       );
     }
-    if (installedId !== this.#extensionId) {
-      throw new ManagedMcpError(
-        'EXTENSION_NOT_READY',
-        'The managed ScriptCat extension ID does not match the pinned ID.',
-        {expectedId: this.#extensionId, installedId},
+    if (!accessEnabled) {
+      await setExtensionUserScriptsAccess(
+        this.#browser,
+        this.#extensionId,
+        true,
       );
-    }
-
-    await setExtensionUserScriptsAccess(this.#browser, this.#extensionId, true);
-
-    const reloadedId = await this.#browser.installExtension(
-      this.#extensionPath,
-    );
-    if (reloadedId !== this.#extensionId) {
-      throw new ManagedMcpError(
-        'EXTENSION_NOT_READY',
-        'Reloading the managed ScriptCat extension changed its ID.',
-        {expectedId: this.#extensionId, reloadedId},
-      );
+      this.#accessRepairCount += 1;
+      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.ACCESS_REPAIRED;
     }
     await this.#waitUntilReady();
   }
@@ -239,6 +274,9 @@ export class ScriptCatManager {
         userScriptsAccessEnabled: null,
         backendTransportReady: false,
         repositoryRoot: this.#repositoryRoot,
+        startupAction: this.#startupAction,
+        installCount: this.#installCount,
+        accessRepairCount: this.#accessRepairCount,
       };
     }
 
@@ -271,6 +309,9 @@ export class ScriptCatManager {
       userScriptsAccessEnabled,
       backendTransportReady,
       repositoryRoot: this.#repositoryRoot,
+      startupAction: this.#startupAction,
+      installCount: this.#installCount,
+      accessRepairCount: this.#accessRepairCount,
     };
   }
 
@@ -437,6 +478,125 @@ export class ScriptCatManager {
     );
   }
 
+  async #getExtensions(): Promise<RawExtension[]> {
+    const connection = this.#connection();
+    let response: RawExtensionsResponse;
+    try {
+      response = await connection.send<RawExtensionsResponse>(
+        'Extensions.getExtensions',
+      );
+    } catch (error) {
+      throw new ManagedMcpError(
+        'BROWSER_UNSUPPORTED',
+        'The browser does not support Extensions.getExtensions.',
+        {},
+        {cause: error},
+      );
+    }
+    if (!Array.isArray(response.extensions)) {
+      throw this.#notReady('The browser returned an invalid extension list.');
+    }
+    return response.extensions;
+  }
+
+  #findManagedExtension(extensions: RawExtension[]): RawExtension | undefined {
+    const pathMatches = extensions.filter(
+      extension => extension.path === this.#extensionPath,
+    );
+    if (pathMatches.length > 1) {
+      throw this.#notReady(
+        'The managed ScriptCat extension path appears more than once.',
+      );
+    }
+    if (pathMatches.length === 1 && pathMatches[0]?.id !== this.#extensionId) {
+      throw this.#notReady(
+        'The managed ScriptCat extension path belongs to an unexpected ID.',
+        {
+          expectedId: this.#extensionId,
+          actualId: pathMatches[0]?.id,
+        },
+      );
+    }
+    const matches = extensions.filter(
+      extension => extension.id === this.#extensionId,
+    );
+    if (matches.length > 1) {
+      throw this.#notReady(
+        'The managed ScriptCat extension appears more than once.',
+      );
+    }
+    return matches[0];
+  }
+
+  #assertManagedExtension(extension: RawExtension): void {
+    if (
+      extension.id !== this.#extensionId ||
+      extension.path !== this.#extensionPath ||
+      extension.version !== this.#extensionVersion ||
+      !extension.enabled
+    ) {
+      throw this.#notReady(
+        'The managed ScriptCat extension does not match its pinned release.',
+        {
+          actual: extension,
+          expected: {
+            id: this.#extensionId,
+            path: this.#extensionPath,
+            version: this.#extensionVersion,
+            enabled: true,
+          },
+        },
+      );
+    }
+  }
+
+  async #loadManagedExtension(): Promise<void> {
+    const connection = this.#connection();
+    let response: RawLoadUnpackedResponse;
+    try {
+      response = await connection.send<RawLoadUnpackedResponse>(
+        'Extensions.loadUnpacked',
+        {
+          path: this.#extensionPath,
+          expectedId: this.#extensionId,
+          userScriptsAccess: true,
+        },
+      );
+    } catch (error) {
+      throw this.#notReady('Failed to load the managed ScriptCat extension.', {
+        extensionPath: this.#extensionPath,
+        cause: error,
+      });
+    }
+    if (response.id !== undefined && response.id !== this.#extensionId) {
+      throw this.#notReady(
+        'The managed ScriptCat extension ID does not match the pinned ID.',
+        {
+          expectedId: this.#extensionId,
+          loadedId: response.id,
+        },
+      );
+    }
+  }
+
+  #connection(): NonNullable<RawCdpBrowser['_connection']> {
+    const connection = (this.#browser as RawCdpBrowser)._connection;
+    if (!connection) {
+      throw new ManagedMcpError(
+        'BROWSER_UNSUPPORTED',
+        'The browser does not expose a root CDP connection.',
+      );
+    }
+    return connection;
+  }
+
+  #notReady(
+    message: string,
+    details: Record<string, unknown> = {},
+  ): ManagedMcpError {
+    return new ManagedMcpError('EXTENSION_NOT_READY', message, details);
+  }
+
   #throwProtectedMutation(mutation: ManagedExtensionMutation): never {
     throw new ManagedMcpError(
       MANAGED_EXTENSION_PROTECTED_ERROR_CODE,
@@ -473,6 +633,25 @@ async function canonicalDirectory(
     );
   }
   return canonicalPath;
+}
+
+async function manifestVersion(extensionPath: string): Promise<string> {
+  try {
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(extensionPath, 'manifest.json'), 'utf8'),
+    ) as {version?: unknown};
+    if (typeof manifest.version !== 'string' || manifest.version === '') {
+      throw new Error('manifest version is missing');
+    }
+    return manifest.version;
+  } catch (error) {
+    throw new ManagedMcpError(
+      'EXTENSION_NOT_READY',
+      'The managed ScriptCat extension manifest has no valid version.',
+      {extensionPath},
+      {cause: error},
+    );
+  }
 }
 
 function toSummary(record: ScriptCatRecord): ScriptCatScriptSummary {

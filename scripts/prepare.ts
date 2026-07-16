@@ -6,7 +6,8 @@
 
 import {readFileSync, writeFileSync} from 'node:fs';
 import {rm} from 'node:fs/promises';
-import {resolve} from 'node:path';
+import {createRequire} from 'node:module';
+import {dirname, resolve} from 'node:path';
 
 const projectRoot = process.cwd();
 
@@ -23,9 +24,17 @@ const filesToRemove = [
  * the same property.
  */
 function removeConflictingGlobalDeclaration(): void {
+  const packageRequire = createRequire(resolve(projectRoot, 'package.json'));
+  const lighthousePackagePath = packageRequire.resolve(
+    'lighthouse/package.json',
+  );
+  const traceEnginePackagePath = packageRequire.resolve(
+    '@paulirish/trace_engine/package.json',
+    {paths: [lighthousePackagePath]},
+  );
   const filePath = resolve(
-    projectRoot,
-    'node_modules/@paulirish/trace_engine/models/trace/ModelImpl.d.ts',
+    dirname(traceEnginePackagePath),
+    'models/trace/ModelImpl.d.ts',
   );
   console.log(
     'Removing conflicting global declaration from @paulirish/trace_engine...',

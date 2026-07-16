@@ -97,5 +97,10 @@
   },
   "overrides": {
     "puppeteer-core": "$puppeteer"
+  },
+  "pnpm": {
+    "overrides": {
+      "puppeteer-core": "$puppeteer"
+    }
   }
 }
