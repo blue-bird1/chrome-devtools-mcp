@@ -20,9 +20,44 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import {executablePath} from 'puppeteer';
 
+import {createBrowserLifecycleInitializer} from '../src/index.js';
 import type {ToolCategory} from '../src/tools/categories.js';
 import {OFF_BY_DEFAULT_CATEGORIES} from '../src/tools/categories.js';
 import type {ToolDefinition} from '../src/tools/ToolDefinition.js';
+
+describe('browser lifecycle initialization', () => {
+  it('reuses a failed attempt for one browser and starts once for a new browser', async () => {
+    const firstBrowser = {};
+    const secondBrowser = {};
+    const firstFailure = new Error();
+    const secondFailure = new Error();
+    const initializedBrowsers: object[] = [];
+    const initialize = createBrowserLifecycleInitializer(async browser => {
+      initializedBrowsers.push(browser);
+      throw browser === firstBrowser ? firstFailure : secondFailure;
+    });
+
+    const firstAttempt = initialize(firstBrowser);
+    const firstRetry = initialize(firstBrowser);
+    assert.strictEqual(firstRetry, firstAttempt);
+    await assert.rejects(firstAttempt, error => {
+      assert.strictEqual(error, firstFailure);
+      return true;
+    });
+    await assert.rejects(firstRetry, error => {
+      assert.strictEqual(error, firstFailure);
+      return true;
+    });
+
+    const secondAttempt = initialize(secondBrowser);
+    assert.notStrictEqual(secondAttempt, firstAttempt);
+    await assert.rejects(secondAttempt, error => {
+      assert.strictEqual(error, secondFailure);
+      return true;
+    });
+    assert.deepStrictEqual(initializedBrowsers, [firstBrowser, secondBrowser]);
+  });
+});
 
 describe('e2e', () => {
   async function withClient(

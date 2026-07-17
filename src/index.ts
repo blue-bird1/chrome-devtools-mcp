@@ -6,6 +6,8 @@
 
 import type fs from 'node:fs';
 
+import type {Browser} from 'puppeteer';
+
 import type {parseArguments} from './bin/chrome-devtools-mcp-cli-options.js';
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
@@ -29,6 +31,31 @@ import {createTools} from './tools/tools.js';
 import {VERSION} from './version.js';
 
 export {buildFlag} from './ToolHandler.js';
+
+export function createBrowserLifecycleInitializer<
+  BrowserIdentity extends object,
+  InitializationResult,
+>(
+  initialize: (browser: BrowserIdentity) => Promise<InitializationResult>,
+): (browser: BrowserIdentity) => Promise<InitializationResult> {
+  const attempts = new WeakMap<
+    BrowserIdentity,
+    Promise<InitializationResult>
+  >();
+
+  return browser => {
+    const existingAttempt = attempts.get(browser);
+    if (existingAttempt) {
+      return existingAttempt;
+    }
+
+    const attempt = Promise.resolve().then(() => {
+      return initialize(browser);
+    });
+    attempts.set(browser, attempt);
+    return attempt;
+  };
+}
 
 export async function createMcpServer(
   serverArgs: ReturnType<typeof parseArguments>,
@@ -92,7 +119,27 @@ export async function createMcpServer(
 
   let context: McpContext;
   let scriptCat: ScriptCatManager | undefined;
-  let scriptCatBrowser: object | undefined;
+  const scriptCatOptions =
+    serverArgs.managedScriptcatPath &&
+    serverArgs.scriptcatRepositoryRoot &&
+    serverArgs.scriptcatExtensionId
+      ? {
+          extensionPath: serverArgs.managedScriptcatPath,
+          extensionId: serverArgs.scriptcatExtensionId,
+          repositoryRoot: serverArgs.scriptcatRepositoryRoot,
+          timeout: serverArgs.scriptcatTimeout,
+        }
+      : undefined;
+  const initializeScriptCat = scriptCatOptions
+    ? createBrowserLifecycleInitializer(async (browser: Browser) => {
+        const manager = await ScriptCatManager.create(
+          browser,
+          scriptCatOptions,
+        );
+        await manager.initialize();
+        return manager;
+      })
+    : undefined;
   async function getContext(): Promise<McpContext> {
     const chromeArgs: string[] = (serverArgs.chromeArg ?? []).map(String);
     const ignoreDefaultChromeArgs: string[] = (
@@ -143,21 +190,9 @@ export async function createMcpServer(
           });
 
     if (context?.browser !== browser) {
-      if (
-        serverArgs.managedScriptcatPath &&
-        serverArgs.scriptcatRepositoryRoot &&
-        serverArgs.scriptcatExtensionId &&
-        scriptCatBrowser !== browser
-      ) {
-        scriptCat = await ScriptCatManager.create(browser, {
-          extensionPath: serverArgs.managedScriptcatPath,
-          extensionId: serverArgs.scriptcatExtensionId,
-          repositoryRoot: serverArgs.scriptcatRepositoryRoot,
-          timeout: serverArgs.scriptcatTimeout,
-        });
-        await scriptCat.initialize();
-        scriptCatBrowser = browser;
-      }
+      scriptCat = initializeScriptCat
+        ? await initializeScriptCat(browser)
+        : undefined;
       context = await McpContext.from(browser, logger, {
         experimentalDevToolsDebugging: devtools,
         experimentalIncludeAllPages: serverArgs.experimentalIncludeAllPages,
