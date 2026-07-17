@@ -306,7 +306,7 @@ describe('ScriptCatManager', () => {
     }
   });
 
-  it('initializes the managed extension without redundant mutations and propagates load errors', async () => {
+  it('loads the managed extension exactly once per browser lifecycle', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const worker = readyWorker();
@@ -320,6 +320,8 @@ describe('ScriptCatManager', () => {
       [];
     let extensions = [expectedExtension];
     let userScriptsAccess = true;
+    let grantAccessOnLoad = true;
+    let loadedExtensions = [expectedExtension];
     let loadError: Error | undefined;
     const restoreChrome = installChromeApi();
     (
@@ -346,13 +348,11 @@ describe('ScriptCatManager', () => {
             if (loadError) {
               throw loadError;
             }
-            extensions = [expectedExtension];
-            userScriptsAccess = true;
+            extensions = loadedExtensions;
+            if (grantAccessOnLoad) {
+              userScriptsAccess = true;
+            }
             return {id: EXTENSION_ID} as T;
-          }
-          if (method === 'Extensions.setUserScriptsAccess') {
-            userScriptsAccess = params?.enabled === true;
-            return undefined as T;
           }
           throw new Error(`Unexpected CDP method: ${method}`);
         },
@@ -372,8 +372,18 @@ describe('ScriptCatManager', () => {
         timeout: 1_000,
       });
       await manager.initialize();
-      assert.deepStrictEqual(mutations, []);
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
 
+      mutations.length = 0;
       extensions = [];
       const missingManager = await ScriptCatManager.create(browser, {
         extensionPath,
@@ -395,6 +405,7 @@ describe('ScriptCatManager', () => {
 
       mutations.length = 0;
       userScriptsAccess = false;
+      grantAccessOnLoad = false;
       const accessManager = await ScriptCatManager.create(browser, {
         extensionPath,
         extensionId: EXTENSION_ID,
@@ -406,10 +417,21 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error.code, 'TIMEOUT');
         return true;
       });
-      assert.deepStrictEqual(mutations, []);
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
 
       mutations.length = 0;
+      grantAccessOnLoad = true;
       extensions = [{...expectedExtension, enabled: false}];
+      loadedExtensions = [{...expectedExtension, enabled: false}];
       const disabledManager = await ScriptCatManager.create(browser, {
         extensionPath,
         extensionId: EXTENSION_ID,
@@ -421,12 +443,21 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error.code, 'EXTENSION_NOT_READY');
         return true;
       });
-      assert.deepStrictEqual(mutations, []);
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
 
+      loadedExtensions = [expectedExtension];
       for (const invalidExtensions of [
         [{...expectedExtension, id: 'unexpected-extension-id'}],
         [{...expectedExtension, path: path.join(extensionPath, 'unexpected')}],
-        [{...expectedExtension, version: '1.3.3'}],
         [
           expectedExtension,
           {...expectedExtension, id: 'duplicate-extension-id'},
@@ -448,7 +479,29 @@ describe('ScriptCatManager', () => {
         assert.deepStrictEqual(mutations, []);
       }
 
+      mutations.length = 0;
+      extensions = [{...expectedExtension, version: '9.8.7'}];
+      loadedExtensions = extensions;
+      const unpinnedVersionManager = await ScriptCatManager.create(browser, {
+        extensionPath,
+        extensionId: EXTENSION_ID,
+        repositoryRoot,
+        timeout: 1_000,
+      });
+      await unpinnedVersionManager.initialize();
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
+
       const protocolError = new Error('load unpacked failed');
+      mutations.length = 0;
       extensions = [];
       loadError = protocolError;
       const failedManager = await ScriptCatManager.create(browser, {
@@ -461,13 +514,23 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error, protocolError);
         return true;
       });
+      assert.deepStrictEqual(mutations, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});
     }
   });
 
-  it('wakes a restored service worker once without changing managed installation counters', async () => {
+  it('wakes a restored service worker after the managed load', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const restoreChrome = installChromeApi();
@@ -513,6 +576,9 @@ describe('ScriptCatManager', () => {
             return {extensions: [extension]} as T;
           }
           rootRequests.push({method, params});
+          if (method === 'Extensions.loadUnpacked') {
+            return {id: EXTENSION_ID} as T;
+          }
           throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
@@ -542,7 +608,16 @@ describe('ScriptCatManager', () => {
       });
       await manager.initialize();
 
-      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(rootRequests, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
       assert.deepStrictEqual(pageRequests, [
         {
           method: 'ServiceWorker.enable',
@@ -588,6 +663,9 @@ describe('ScriptCatManager', () => {
             } as T;
           }
           rootRequests.push({method, params});
+          if (method === 'Extensions.loadUnpacked') {
+            return {id: EXTENSION_ID} as T;
+          }
           throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
@@ -611,14 +689,23 @@ describe('ScriptCatManager', () => {
         timeout: 1_000,
       });
       await manager.initialize();
-      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(rootRequests, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});
     }
   });
 
-  it('reports unsupported worker startup without reloading a restored extension', async () => {
+  it('reports unsupported worker startup after the managed load', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const restoreChrome = installChromeApi();
@@ -661,6 +748,9 @@ describe('ScriptCatManager', () => {
             } as T;
           }
           rootRequests.push({method, params});
+          if (method === 'Extensions.loadUnpacked') {
+            return {id: EXTENSION_ID} as T;
+          }
           throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
@@ -689,7 +779,16 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error.code, 'BROWSER_UNSUPPORTED');
         return true;
       });
-      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(rootRequests, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
       assert.deepStrictEqual(pageRequests, [
         {
           method: 'ServiceWorker.enable',
@@ -733,6 +832,9 @@ describe('ScriptCatManager', () => {
             } as T;
           }
           rootRequests.push({method, params});
+          if (method === 'Extensions.loadUnpacked') {
+            return {id: EXTENSION_ID} as T;
+          }
           throw new Error(`Unexpected root CDP method: ${method}`);
         },
       },
@@ -761,7 +863,16 @@ describe('ScriptCatManager', () => {
         assert.strictEqual(error.code, 'BROWSER_UNSUPPORTED');
         return true;
       });
-      assert.deepStrictEqual(rootRequests, []);
+      assert.deepStrictEqual(rootRequests, [
+        {
+          method: 'Extensions.loadUnpacked',
+          params: {
+            path: extensionPath,
+            expectedId: EXTENSION_ID,
+            userScriptsAccess: true,
+          },
+        },
+      ]);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});

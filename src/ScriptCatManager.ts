@@ -141,21 +141,18 @@ export class ScriptCatManager {
   readonly #repositoryRoot: string;
   readonly #timeout: number;
   readonly #backend: ScriptCatBackend;
-  readonly #extensionVersion: string;
 
   private constructor(
     browser: Browser,
     options: ScriptCatManagerOptions,
     extensionPath: string,
     repositoryRoot: string,
-    extensionVersion: string,
   ) {
     this.#browser = browser;
     this.#extensionPath = extensionPath;
     this.#extensionId = options.extensionId;
     this.#repositoryRoot = repositoryRoot;
     this.#timeout = options.timeout;
-    this.#extensionVersion = extensionVersion;
     this.#backend = new ScriptCatBackend(
       browser,
       options.extensionId,
@@ -171,24 +168,20 @@ export class ScriptCatManager {
       canonicalDirectory(options.extensionPath, 'managed ScriptCat extension'),
       canonicalDirectory(options.repositoryRoot, 'ScriptCat repository root'),
     ]);
-    const extensionVersion = await manifestVersion(extensionPath);
     return new ScriptCatManager(
       browser,
       options,
       extensionPath,
       repositoryRoot,
-      extensionVersion,
     );
   }
 
   async initialize(): Promise<void> {
-    let extension = this.#findManagedExtension(await this.#getExtensions());
+    this.#findManagedExtension(await this.#getExtensions());
+    await this.#loadManagedExtension();
+    const extension = this.#findManagedExtension(await this.#getExtensions());
     if (!extension) {
-      await this.#loadManagedExtension();
-      extension = this.#findManagedExtension(await this.#getExtensions());
-      if (!extension) {
-        throw this.#notReady('The managed ScriptCat extension was not loaded.');
-      }
+      throw this.#notReady('The managed ScriptCat extension was not loaded.');
     }
     this.#assertManagedExtension(extension);
 
@@ -514,28 +507,33 @@ export class ScriptCatManager {
         'The managed ScriptCat extension appears more than once.',
       );
     }
-    return matches[0];
+    const match = matches[0];
+    if (match && match.path !== this.#extensionPath) {
+      throw this.#notReady(
+        'The managed ScriptCat extension ID belongs to an unexpected path.',
+        {
+          expectedPath: this.#extensionPath,
+          actualPath: match.path,
+        },
+      );
+    }
+    return match;
   }
 
   #assertManagedExtension(extension: RawExtension): void {
     if (
       extension.id !== this.#extensionId ||
       extension.path !== this.#extensionPath ||
-      extension.version !== this.#extensionVersion ||
       !extension.enabled
     ) {
-      throw this.#notReady(
-        'The managed ScriptCat extension does not match its pinned release.',
-        {
-          actual: extension,
-          expected: {
-            id: this.#extensionId,
-            path: this.#extensionPath,
-            version: this.#extensionVersion,
-            enabled: true,
-          },
+      throw this.#notReady('The managed ScriptCat extension is not ready.', {
+        actual: extension,
+        expected: {
+          id: this.#extensionId,
+          path: this.#extensionPath,
+          enabled: true,
         },
-      );
+      });
     }
   }
 
@@ -614,25 +612,6 @@ async function canonicalDirectory(
     );
   }
   return canonicalPath;
-}
-
-async function manifestVersion(extensionPath: string): Promise<string> {
-  try {
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(extensionPath, 'manifest.json'), 'utf8'),
-    ) as {version?: unknown};
-    if (typeof manifest.version !== 'string' || manifest.version === '') {
-      throw new Error('manifest version is missing');
-    }
-    return manifest.version;
-  } catch (error) {
-    throw new ManagedMcpError(
-      'EXTENSION_NOT_READY',
-      'The managed ScriptCat extension manifest has no valid version.',
-      {extensionPath},
-      {cause: error},
-    );
-  }
 }
 
 function toSummary(record: ScriptCatRecord): ScriptCatScriptSummary {
