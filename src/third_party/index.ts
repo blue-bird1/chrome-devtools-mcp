@@ -38,10 +38,14 @@ export {
 export {z as zod} from 'zod';
 export {default as ajv} from 'ajv';
 export {
+  Browser,
   Locator,
+  Page,
   PredefinedNetworkConditions,
   KnownDevices,
   CDPSessionEvent,
+  Target,
+  TargetType,
 } from 'puppeteer-core';
 export {default as puppeteer} from 'puppeteer-core';
 export type * from 'puppeteer-core';

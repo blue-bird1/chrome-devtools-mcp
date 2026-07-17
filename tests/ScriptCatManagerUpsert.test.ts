@@ -10,9 +10,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {describe, it} from 'node:test';
 
+import sinon from 'sinon';
+
 import {ManagedMcpError} from '../src/ManagedMcpError.js';
 import {ScriptCatManager} from '../src/ScriptCatManager.js';
-import type {Browser, Page, Target} from '../src/third_party/index.js';
+import {Browser, Page, Target, TargetType} from '../src/third_party/index.js';
 
 const EXTENSION_ID = 'ckchkcgpbkhleahkgkbiiikpcjdbopje';
 const GET_ACTION = 'serviceWorker/script/fetchInfo';
@@ -21,7 +23,7 @@ const SET_CHECK_UPDATE_ACTION = 'serviceWorker/script/setCheckUpdateUrl';
 const SCRIPT_ID = '600c047d-0780-506e-b10d-e2860ed3d3d4';
 const SOURCE = '// ==UserScript==\n// @name Managed\n// ==/UserScript==\n';
 
-interface RuntimeMessage {
+interface RuntimeMessage extends Record<string, unknown> {
   action: string;
   data: unknown;
 }
@@ -38,39 +40,6 @@ interface ScriptRecord {
 
 function response(data: unknown): {code: number; data: unknown} {
   return {code: 0, data};
-}
-
-function installChromeApi(
-  handler: (message: RuntimeMessage) => unknown,
-): () => void {
-  const priorChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
-  Object.defineProperty(globalThis, 'chrome', {
-    configurable: true,
-    value: {
-      runtime: {
-        sendMessage: (
-          message: RuntimeMessage,
-          callback: (result: unknown) => void,
-        ): void => callback(handler(message)),
-      },
-    },
-  });
-  return () => {
-    if (priorChrome) {
-      Object.defineProperty(globalThis, 'chrome', priorChrome);
-    } else {
-      Reflect.deleteProperty(globalThis, 'chrome');
-    }
-  };
-}
-
-function offscreenTarget(page: Page): Target {
-  return {
-    type: () => 'other',
-    url: () => `chrome-extension://${EXTENSION_ID}/src/offscreen.html`,
-    page: async () => page,
-    asPage: async () => page,
-  } as unknown as Target;
 }
 
 describe('ScriptCatManager upsert', () => {
@@ -102,7 +71,7 @@ describe('ScriptCatManager upsert', () => {
     const receivedMessages: RuntimeMessage[] = [];
     let installed = false;
     let rejectUpdateSetting = true;
-    const restoreChrome = installChromeApi(message => {
+    const handleMessage = (message: RuntimeMessage): unknown => {
       receivedMessages.push(message);
       if (message.action === GET_ACTION) {
         return response(installed ? record : null);
@@ -118,16 +87,35 @@ describe('ScriptCatManager upsert', () => {
         return response(undefined);
       }
       throw new Error(`Unexpected ScriptCat action: ${message.action}`);
+    };
+    const page: Page = Object.create(Page.prototype);
+    sinon.stub(page, 'evaluate').callsFake(async (_pageFunction, payload) => {
+      if (!isRuntimeMessage(payload)) {
+        throw new Error('ScriptCat transport payload is invalid.');
+      }
+      return {response: handleMessage(payload)};
     });
-    const page = {
-      evaluate: async (
-        callback: (payload: unknown) => unknown,
-        payload: unknown,
-      ): Promise<unknown> => await callback(payload),
-    } as unknown as Page;
-    const browser = {
-      targets: () => [offscreenTarget(page)],
-    } as unknown as Browser;
+    const target: Target = Object.create(Target.prototype);
+    Object.defineProperties(target, {
+      type: {
+        value: sinon.stub<[], TargetType>().returns(TargetType.OTHER),
+      },
+      url: {
+        value: sinon
+          .stub<[], string>()
+          .returns(`chrome-extension://${EXTENSION_ID}/src/offscreen.html`),
+      },
+      page: {
+        value: sinon.stub<[], Promise<Page | null>>().resolves(page),
+      },
+      asPage: {
+        value: sinon.stub<[], Promise<Page>>().resolves(page),
+      },
+    });
+    const browser: Browser = Object.create(Browser.prototype);
+    Object.defineProperty(browser, 'targets', {
+      value: sinon.stub<[], Target[]>().returns([target]),
+    });
 
     try {
       const manager = await ScriptCatManager.create(browser, {
@@ -180,8 +168,16 @@ describe('ScriptCatManager upsert', () => {
         },
       ]);
     } finally {
-      restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});
     }
   });
 });
+
+function isRuntimeMessage(value: unknown): value is RuntimeMessage {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  return (
+    'action' in value && typeof value.action === 'string' && 'data' in value
+  );
+}
