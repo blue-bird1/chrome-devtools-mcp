@@ -935,7 +935,7 @@ export class McpContext implements Context {
     id: string,
     enabled: boolean,
   ): Promise<void> {
-    this.#scriptCat?.assertUserScriptsAccessChangeAllowed(id, enabled);
+    this.#scriptCat?.assertUserScriptsAccessChangeAllowed(id);
     await setExtensionUserScriptsAccess(this.browser, id, enabled);
   }
 

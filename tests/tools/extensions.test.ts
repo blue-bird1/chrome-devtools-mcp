@@ -246,6 +246,10 @@ describe('extension', () => {
             setExtensionUserScriptsAccess.schema,
             {id: MANAGED_EXTENSION_ID, enabled: false},
           );
+          const enableAccessParams = parseParams(
+            setExtensionUserScriptsAccess.schema,
+            {id: MANAGED_EXTENSION_ID, enabled: true},
+          );
 
           await assertManagedExtensionProtected(() =>
             installExtension.handler(
@@ -275,45 +279,17 @@ describe('extension', () => {
               context,
             ),
           );
-
-          assert.strictEqual(installSpy.callCount, 0);
-          assert.strictEqual(uninstallSpy.callCount, 0);
-          assert.strictEqual(sendStub.callCount, 0);
-
-          const enableAccessParams = parseParams(
-            setExtensionUserScriptsAccess.schema,
-            {id: MANAGED_EXTENSION_ID, enabled: true},
-          );
-          await setExtensionUserScriptsAccess.handler(
-            {params: enableAccessParams},
-            response,
-            context,
-          );
-          await setExtensionUserScriptsAccess.handler(
-            {params: enableAccessParams},
-            response,
-            context,
-          );
           await assertManagedExtensionProtected(() =>
             setExtensionUserScriptsAccess.handler(
-              {params: disableAccessParams},
+              {params: enableAccessParams},
               response,
               context,
             ),
           );
-          assert.deepStrictEqual(
-            sendStub.getCalls().map(call => call.args),
-            [
-              [
-                SET_USER_SCRIPTS_ACCESS_METHOD,
-                {id: MANAGED_EXTENSION_ID, enabled: true},
-              ],
-              [
-                SET_USER_SCRIPTS_ACCESS_METHOD,
-                {id: MANAGED_EXTENSION_ID, enabled: true},
-              ],
-            ],
-          );
+
+          assert.strictEqual(installSpy.callCount, 0);
+          assert.strictEqual(uninstallSpy.callCount, 0);
+          assert.strictEqual(sendStub.callCount, 0);
 
           const otherInstallParams = parseParams(installExtension.schema, {
             path: EXTENSION_WITH_SW_PATH,

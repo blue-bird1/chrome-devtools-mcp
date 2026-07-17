@@ -107,7 +107,7 @@ export interface ScriptCatManagerOptions {
 }
 
 export type ManagedExtensionMutation =
-  'install' | 'reload' | 'uninstall' | 'disable-user-scripts';
+  'install' | 'reload' | 'uninstall' | 'user-scripts-access';
 
 export async function setExtensionUserScriptsAccess(
   browser: Browser,
@@ -221,12 +221,9 @@ export class ScriptCatManager {
     }
   }
 
-  assertUserScriptsAccessChangeAllowed(
-    extensionId: string,
-    enabled: boolean,
-  ): void {
-    if (extensionId === this.#extensionId && !enabled) {
-      this.#throwProtectedMutation('disable-user-scripts');
+  assertUserScriptsAccessChangeAllowed(extensionId: string): void {
+    if (extensionId === this.#extensionId) {
+      this.#throwProtectedMutation('user-scripts-access');
     }
   }
 
