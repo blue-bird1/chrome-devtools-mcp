@@ -49,16 +49,6 @@ interface RawLoadUnpackedResponse {
   id?: string;
 }
 
-export const SCRIPT_CAT_STARTUP_ACTION = {
-  NOT_INITIALIZED: 'not-initialized',
-  EXISTING: 'existing',
-  LOADED: 'loaded',
-  ACCESS_REPAIRED: 'access-repaired',
-} as const;
-
-export type ScriptCatStartupAction =
-  (typeof SCRIPT_CAT_STARTUP_ACTION)[keyof typeof SCRIPT_CAT_STARTUP_ACTION];
-
 interface ScriptCatRecord {
   uuid: string;
   name: string;
@@ -83,9 +73,6 @@ export interface ScriptCatStatus {
   userScriptsAccessEnabled: boolean | null;
   backendTransportReady: boolean;
   repositoryRoot: string;
-  startupAction: ScriptCatStartupAction;
-  installCount: number;
-  accessRepairCount: number;
 }
 
 export interface ScriptCatScriptSummary {
@@ -154,10 +141,6 @@ export class ScriptCatManager {
   readonly #timeout: number;
   readonly #backend: ScriptCatBackend;
   readonly #extensionVersion: string;
-  #startupAction: ScriptCatStartupAction =
-    SCRIPT_CAT_STARTUP_ACTION.NOT_INITIALIZED;
-  #installCount = 0;
-  #accessRepairCount = 0;
 
   private constructor(
     browser: Browser,
@@ -201,14 +184,10 @@ export class ScriptCatManager {
     let extension = this.#findManagedExtension(await this.#getExtensions());
     if (!extension) {
       await this.#loadManagedExtension();
-      this.#installCount += 1;
-      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.LOADED;
       extension = this.#findManagedExtension(await this.#getExtensions());
       if (!extension) {
         throw this.#notReady('The managed ScriptCat extension was not loaded.');
       }
-    } else {
-      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.EXISTING;
     }
     this.#assertManagedExtension(extension);
 
@@ -219,8 +198,6 @@ export class ScriptCatManager {
         this.#extensionId,
         true,
       );
-      this.#accessRepairCount += 1;
-      this.#startupAction = SCRIPT_CAT_STARTUP_ACTION.ACCESS_REPAIRED;
     }
     await this.#waitUntilReady();
   }
@@ -269,9 +246,6 @@ export class ScriptCatManager {
         userScriptsAccessEnabled: null,
         backendTransportReady: false,
         repositoryRoot: this.#repositoryRoot,
-        startupAction: this.#startupAction,
-        installCount: this.#installCount,
-        accessRepairCount: this.#accessRepairCount,
       };
     }
 
@@ -304,9 +278,6 @@ export class ScriptCatManager {
       userScriptsAccessEnabled,
       backendTransportReady,
       repositoryRoot: this.#repositoryRoot,
-      startupAction: this.#startupAction,
-      installCount: this.#installCount,
-      accessRepairCount: this.#accessRepairCount,
     };
   }
 

@@ -4,22 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {execSync, type ChildProcess} from 'node:child_process';
+import {execSync} from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import {logger} from './logger.js';
-import {
-  assertManagedExtensionConsistency,
-  type ManagedExtensionConsistencyOptions,
-} from './ManagedExtensionConsistency.js';
-import {
-  acquireProfileLock,
-  bindProfileLockToBrowser,
-  type ProfileLockOwner,
-  releaseProfileLock,
-} from './ProfileLock.js';
 import type {
   Browser,
   ChromeReleaseChannel,
@@ -30,12 +20,6 @@ import {puppeteer} from './third_party/index.js';
 
 let browser: Browser | undefined;
 let browserMode: 'launched' | 'connected' | undefined;
-let browserProfileLockOwner: ProfileLockOwner | undefined;
-let browserLaunchPromise: Promise<Browser> | undefined;
-let browserClosePromise: Promise<void> | undefined;
-
-const PROCESS_EXIT_TIMEOUT_MS = 2_000;
-const BROWSER_CLOSE_TIMEOUT_MS = 2_000;
 
 function makeTargetFilter(enableExtensions = false) {
   const ignoredPrefixes = new Set(['chrome://', 'chrome-untrusted://']);
@@ -178,8 +162,6 @@ interface McpLaunchOptions {
   viaCli?: boolean;
   blocklist?: string[];
   allowlist?: string[];
-  profileLock?: boolean;
-  managedExtensionConsistency?: ManagedExtensionConsistencyOptions;
 }
 
 export function detectDisplay(): void {
@@ -295,254 +277,39 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
 export async function ensureBrowserLaunched(
   options: McpLaunchOptions,
 ): Promise<Browser> {
-  while (true) {
-    if (browserClosePromise) {
-      await browserClosePromise;
-      continue;
-    }
-    if (browser?.connected) {
-      return browser;
-    }
-    if (browser && browserMode === 'launched') {
-      await closeBrowser();
-      continue;
-    }
-    if (browserLaunchPromise) {
-      return await browserLaunchPromise;
-    }
-    break;
+  if (browser?.connected) {
+    return browser;
   }
-
-  const profileLockOwner: ProfileLockOwner = {};
-  const launchPromise = (async (): Promise<Browser> => {
-    let profileLockAcquired = false;
-    let launched: Browser | undefined;
-    try {
-      if (options.profileLock) {
-        if (!options.userDataDir) {
-          throw new Error(
-            'A user data directory is required for profile locking.',
-          );
-        }
-        await acquireProfileLock(options.userDataDir, profileLockOwner);
-        profileLockAcquired = true;
-      }
-      if (options.managedExtensionConsistency) {
-        await assertManagedExtensionConsistency(
-          options.managedExtensionConsistency,
-        );
-      }
-      launched = await launch(options);
-      if (profileLockAcquired) {
-        const child = launched.process();
-        if (!child) {
-          throw new Error(
-            'The launched browser does not expose its OS process.',
-          );
-        }
-        await bindProfileLockToBrowser(profileLockOwner, child);
-      }
-      // Assign mode and ownership before browser; see the connect path above
-      // for rationale.
-      browserMode = 'launched';
-      browserProfileLockOwner = profileLockAcquired
-        ? profileLockOwner
-        : undefined;
-      browser = launched;
-      return browser;
-    } catch (error) {
-      if (launched) {
-        await closeLaunchedBrowser(launched).catch(closeError => {
-          logger?.(
-            'Failed to close browser after profile lock setup',
-            closeError,
-          );
-        });
-      }
-      if (profileLockAcquired) {
-        await releaseProfileLock(profileLockOwner);
-      }
-      throw error;
-    }
-  })();
-  browserLaunchPromise = launchPromise;
-  try {
-    return await launchPromise;
-  } finally {
-    if (browserLaunchPromise === launchPromise) {
-      browserLaunchPromise = undefined;
-    }
-  }
+  // Assign mode before browser; see the connect path above for rationale.
+  const launched = await launch(options);
+  browserMode = 'launched';
+  browser = launched;
+  return browser;
 }
 
 /**
  * Shutdown hook for the active browser. Closes a launched browser (so the
  * Chrome subprocess is reaped) or disconnects from an attached browser (so
- * the user's Chrome instance stays alive). A launched browser remains owned
- * until its OS process exits, even if its CDP connection has already dropped.
- * Called from the server entrypoint on stdin EOF / SIGTERM / SIGINT.
+ * the user's Chrome instance stays alive). No-op if no browser is active or
+ * the connection has already been dropped. Called from the server entrypoint
+ * on stdin EOF / SIGTERM / SIGINT.
  */
 export async function closeBrowser(): Promise<void> {
-  if (browserClosePromise) {
-    return await browserClosePromise;
-  }
-
-  const closePromise = closeActiveBrowser();
-  browserClosePromise = closePromise;
-  try {
-    await closePromise;
-  } finally {
-    if (browserClosePromise === closePromise) {
-      browserClosePromise = undefined;
-    }
-  }
-}
-
-export async function closeBrowserWithBackstop(
-  onTimeout: () => void,
-  timeout = 10_000,
-): Promise<void> {
-  const timeoutId = setTimeout(onTimeout, timeout);
-  timeoutId.unref();
-  try {
-    await closeBrowser();
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function closeActiveBrowser(): Promise<void> {
-  const launchPromise = browserLaunchPromise;
-  if (launchPromise) {
-    try {
-      await launchPromise;
-    } catch {
-      return;
-    }
-  }
-
   const b = browser;
   const mode = browserMode;
-  const profileLockOwner = browserProfileLockOwner;
   browser = undefined;
   browserMode = undefined;
-  browserProfileLockOwner = undefined;
-  if (!b) {
+  if (!b || !b.connected) {
     return;
   }
   if (mode === 'launched') {
-    await closeLaunchedBrowser(b);
-    if (profileLockOwner) {
-      try {
-        await releaseProfileLock(profileLockOwner);
-      } catch (error) {
-        logger?.('Failed to release the managed profile lock', error);
-      }
-    }
-    return;
-  }
-  if (!b.connected) {
+    await b.close().catch(err => {
+      logger?.('Failed to close browser', err);
+    });
     return;
   }
   await b.disconnect().catch(err => {
     logger?.('Failed to disconnect from browser', err);
-  });
-}
-
-async function closeLaunchedBrowser(b: Browser): Promise<void> {
-  const child = b.process();
-  if (!child) {
-    throw new Error('The launched browser does not expose its OS process.');
-  }
-
-  if (b.connected) {
-    await closeBrowserOverCdp(b);
-  }
-
-  if (isProcessExited(child)) {
-    return;
-  }
-
-  stopBrowserProcess(child, 'SIGTERM');
-  if (await waitForProcessExit(child, PROCESS_EXIT_TIMEOUT_MS)) {
-    return;
-  }
-
-  stopBrowserProcess(child, 'SIGKILL');
-  if (await waitForProcessExit(child, PROCESS_EXIT_TIMEOUT_MS)) {
-    return;
-  }
-
-  logger?.('Chrome did not exit after SIGKILL; waiting to reap it.');
-  await waitForProcessExit(child);
-}
-
-async function closeBrowserOverCdp(b: Browser): Promise<void> {
-  let timeoutId: NodeJS.Timeout | undefined;
-  const close = b.close().then(
-    () => true,
-    error => {
-      logger?.('Failed to close browser over CDP', error);
-      return true;
-    },
-  );
-  const closeSettled = await Promise.race([
-    close,
-    new Promise<boolean>(resolve => {
-      timeoutId = setTimeout(() => {
-        resolve(false);
-      }, BROWSER_CLOSE_TIMEOUT_MS);
-    }),
-  ]);
-  if (timeoutId) {
-    clearTimeout(timeoutId);
-  }
-  if (!closeSettled) {
-    logger?.('Timed out closing browser over CDP; terminating Chrome.');
-  }
-}
-
-function isProcessExited(child: ChildProcess): boolean {
-  return child.exitCode !== null || child.signalCode !== null;
-}
-
-function stopBrowserProcess(child: ChildProcess, signal: NodeJS.Signals): void {
-  try {
-    child.kill(signal);
-  } catch (error) {
-    logger?.(`Failed to send ${signal} to Chrome`, error);
-  }
-}
-
-async function waitForProcessExit(
-  child: ChildProcess,
-  timeout?: number,
-): Promise<boolean> {
-  if (isProcessExited(child)) {
-    return true;
-  }
-  return await new Promise(resolve => {
-    let timeoutId: NodeJS.Timeout | undefined;
-    const finish = (exited: boolean) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      child.off('exit', onExit);
-      resolve(exited);
-    };
-    const onExit = () => {
-      finish(true);
-    };
-    child.once('exit', onExit);
-    if (isProcessExited(child)) {
-      finish(true);
-      return;
-    }
-    if (timeout !== undefined) {
-      timeoutId = setTimeout(() => {
-        finish(false);
-      }, timeout);
-    }
   });
 }
 

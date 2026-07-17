@@ -11,10 +11,7 @@ import path from 'node:path';
 import {describe, it} from 'node:test';
 
 import {ManagedMcpError} from '../src/ManagedMcpError.js';
-import {
-  SCRIPT_CAT_STARTUP_ACTION,
-  ScriptCatManager,
-} from '../src/ScriptCatManager.js';
+import {ScriptCatManager} from '../src/ScriptCatManager.js';
 import type {Browser, Page, Target} from '../src/third_party/index.js';
 
 const EXTENSION_ID = 'ckchkcgpbkhleahkgkbiiikpcjdbopje';
@@ -214,8 +211,20 @@ describe('ScriptCatManager', () => {
         timeout: 1_000,
       });
       const status = await manager.status();
-      assert.strictEqual(status.backendTransportReady, true);
-      assert.strictEqual(status.ready, true);
+      assert.deepStrictEqual(status, {
+        ready: true,
+        extension: {
+          id: EXTENSION_ID,
+          name: undefined,
+          version: undefined,
+          enabled: true,
+          path: undefined,
+        },
+        serviceWorkerReady: true,
+        userScriptsAccessEnabled: true,
+        backendTransportReady: true,
+        repositoryRoot,
+      });
       assert.strictEqual(legacyGetAllScriptsProbe, false);
       assert.deepStrictEqual(receivedMessages, [
         {action: 'serviceWorker/managed/ping', data: undefined},
@@ -370,18 +379,6 @@ describe('ScriptCatManager', () => {
       });
       await manager.initialize();
       assert.deepStrictEqual(mutations, []);
-      assert.deepStrictEqual(
-        {
-          startupAction: (await manager.status()).startupAction,
-          installCount: (await manager.status()).installCount,
-          accessRepairCount: (await manager.status()).accessRepairCount,
-        },
-        {
-          startupAction: SCRIPT_CAT_STARTUP_ACTION.EXISTING,
-          installCount: 0,
-          accessRepairCount: 0,
-        },
-      );
 
       extensions = [];
       const missingManager = await ScriptCatManager.create(browser, {
@@ -401,18 +398,6 @@ describe('ScriptCatManager', () => {
           },
         },
       ]);
-      assert.deepStrictEqual(
-        {
-          startupAction: (await missingManager.status()).startupAction,
-          installCount: (await missingManager.status()).installCount,
-          accessRepairCount: (await missingManager.status()).accessRepairCount,
-        },
-        {
-          startupAction: SCRIPT_CAT_STARTUP_ACTION.LOADED,
-          installCount: 1,
-          accessRepairCount: 0,
-        },
-      );
 
       mutations.length = 0;
       userScriptsAccess = false;
@@ -429,18 +414,6 @@ describe('ScriptCatManager', () => {
           params: {id: EXTENSION_ID, enabled: true},
         },
       ]);
-      assert.deepStrictEqual(
-        {
-          startupAction: (await accessManager.status()).startupAction,
-          installCount: (await accessManager.status()).installCount,
-          accessRepairCount: (await accessManager.status()).accessRepairCount,
-        },
-        {
-          startupAction: SCRIPT_CAT_STARTUP_ACTION.ACCESS_REPAIRED,
-          installCount: 0,
-          accessRepairCount: 1,
-        },
-      );
 
       mutations.length = 0;
       extensions = [{...expectedExtension, enabled: false}];
@@ -587,20 +560,7 @@ describe('ScriptCatManager', () => {
           params: {scopeURL: `chrome-extension://${EXTENSION_ID}/`},
         },
       ]);
-      assert.deepStrictEqual(
-        {
-          ready: (await manager.status()).ready,
-          startupAction: (await manager.status()).startupAction,
-          installCount: (await manager.status()).installCount,
-          accessRepairCount: (await manager.status()).accessRepairCount,
-        },
-        {
-          ready: true,
-          startupAction: SCRIPT_CAT_STARTUP_ACTION.EXISTING,
-          installCount: 0,
-          accessRepairCount: 0,
-        },
-      );
+      assert.strictEqual((await manager.status()).ready, true);
     } finally {
       restoreChrome();
       await fs.rm(tempRoot, {recursive: true, force: true});

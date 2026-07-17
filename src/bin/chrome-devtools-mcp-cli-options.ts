@@ -7,6 +7,11 @@
 import type {YargsOptions} from '../third_party/index.js';
 import {yargs, hideBin} from '../third_party/index.js';
 
+export const MANAGED_SCRIPTCAT_ARGUMENTS_ERROR =
+  '--managed-scriptcat-path, --scriptcat-repository-root, and --scriptcat-extension-id must be provided together.';
+export const MANAGED_SCRIPTCAT_PROFILE_ERROR =
+  'Managed ScriptCat requires --user-data-dir and an MCP-launched browser; --auto-connect is not supported.';
+
 export const cliOptions = {
   autoConnect: {
     type: 'boolean',
@@ -109,22 +114,10 @@ export const cliOptions = {
       'Path to the user data directory for Chrome. Default is $HOME/.cache/chrome-devtools-mcp/chrome-profile$CHANNEL_SUFFIX_IF_NON_STABLE',
     conflicts: ['browserUrl', 'wsEndpoint', 'isolated'],
   },
-  browserTransport: {
-    type: 'string',
-    choices: ['pipe'] as const,
-    default: 'pipe' as const,
-    description:
-      'Browser transport. The managed ScriptCat browser requires the pipe transport.',
-  },
   managedScriptcatPath: {
     type: 'string',
     description:
       'Absolute path to the managed unpacked ScriptCat extension. Enables managed ScriptCat tools.',
-  },
-  managedScriptcatDataRoot: {
-    type: 'string',
-    description:
-      'Absolute managed ScriptCat data root containing activation-journal.json and current/scriptcat.',
   },
   scriptcatRepositoryRoot: {
     type: 'string',
@@ -427,29 +420,18 @@ export function parseArguments(
     .check(args => {
       const managedValues = [
         args.managedScriptcatPath,
-        args.managedScriptcatDataRoot,
         args.scriptcatRepositoryRoot,
         args.scriptcatExtensionId,
       ];
       const managedCount = managedValues.filter(Boolean).length;
       if (managedCount !== 0 && managedCount !== managedValues.length) {
-        throw new Error(
-          '--managed-scriptcat-path, --managed-scriptcat-data-root, --scriptcat-repository-root, and --scriptcat-extension-id must be provided together.',
-        );
+        throw new Error(MANAGED_SCRIPTCAT_ARGUMENTS_ERROR);
       }
       if (
         args.managedScriptcatPath &&
-        (args.browserUrl ||
-          args.wsEndpoint ||
-          args.autoConnect ||
-          args.isolated)
+        (!args.userDataDir || args.autoConnect)
       ) {
-        throw new Error(
-          'Managed ScriptCat requires an MCP-launched persistent pipe browser.',
-        );
-      }
-      if (args.managedScriptcatPath && !args.userDataDir) {
-        throw new Error('Managed ScriptCat requires --user-data-dir.');
+        throw new Error(MANAGED_SCRIPTCAT_PROFILE_ERROR);
       }
       return true;
     })

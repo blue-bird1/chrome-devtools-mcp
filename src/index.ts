@@ -140,15 +140,6 @@ export async function createMcpServer(
             viaCli: serverArgs.viaCli,
             blocklist,
             allowlist,
-            profileLock: Boolean(serverArgs.managedScriptcatPath),
-            managedExtensionConsistency:
-              serverArgs.managedScriptcatPath &&
-              serverArgs.managedScriptcatDataRoot
-                ? {
-                    dataRoot: serverArgs.managedScriptcatDataRoot,
-                    extensionPath: serverArgs.managedScriptcatPath,
-                  }
-                : undefined,
           });
 
     if (context?.browser !== browser) {
