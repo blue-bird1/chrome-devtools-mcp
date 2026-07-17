@@ -16,6 +16,8 @@ import type {Browser, Page, Target} from '../src/third_party/index.js';
 
 const EXTENSION_ID = 'ckchkcgpbkhleahkgkbiiikpcjdbopje';
 const OFFSCREEN_URL = `chrome-extension://${EXTENSION_ID}/src/offscreen.html`;
+const SOURCE_ACTION = 'serviceWorker/script/getSource';
+const CAPABILITY_PROBE_ID = '__scriptcat_mcp_capability_probe__';
 
 interface WorkerLike {
   evaluate(callback: () => unknown): Promise<unknown>;
@@ -57,9 +59,7 @@ function serviceWorkerTarget(worker: WorkerLike): Target {
 function installChromeApi(
   handleRuntimeMessage: RuntimeMessageHandler = message =>
     response(
-      (message as {action?: unknown}).action === 'serviceWorker/managed/ping'
-        ? {managed: true}
-        : [],
+      (message as {action?: unknown}).action === SOURCE_ACTION ? null : [],
     ),
 ): () => void {
   const priorChrome = Object.getOwnPropertyDescriptor(globalThis, 'chrome');
@@ -177,22 +177,17 @@ describe('ScriptCatManager', () => {
     }
   });
 
-  it('requires the managed ping action and its exact response payload', async () => {
+  it('probes the source capability with an invalid script identifier', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
     const receivedMessages: unknown[] = [];
-    let legacyGetAllScriptsProbe = false;
     const restoreChrome = installChromeApi(message => {
       receivedMessages.push(message);
       const action = (message as {action?: unknown}).action;
-      if (action === 'serviceWorker/script/getAllScripts') {
-        legacyGetAllScriptsProbe = true;
-        return response([]);
+      if (action === SOURCE_ACTION) {
+        return response(null);
       }
-      if (action === 'serviceWorker/managed/ping') {
-        return response({managed: true});
-      }
-      return response({managed: false});
+      return response([]);
     });
     const worker = readyWorker();
     const browser = {
@@ -225,9 +220,8 @@ describe('ScriptCatManager', () => {
         backendTransportReady: true,
         repositoryRoot,
       });
-      assert.strictEqual(legacyGetAllScriptsProbe, false);
       assert.deepStrictEqual(receivedMessages, [
-        {action: 'serviceWorker/managed/ping', data: undefined},
+        {action: SOURCE_ACTION, data: CAPABILITY_PROBE_ID},
       ]);
     } finally {
       restoreChrome();
@@ -235,10 +229,10 @@ describe('ScriptCatManager', () => {
     }
   });
 
-  it('rejects malformed and failed managed ping responses', async () => {
+  it('requires an exact null source capability response', async () => {
     const {extensionPath, repositoryRoot, tempRoot} =
       await createManagerPaths();
-    let probeResponse: unknown = response({managed: true});
+    let probeResponse: unknown = response(null);
     const restoreChrome = installChromeApi(() => probeResponse);
     const worker = readyWorker();
     const browser = {
@@ -258,12 +252,12 @@ describe('ScriptCatManager', () => {
       });
       assert.strictEqual((await manager.status()).ready, true);
 
-      probeResponse = response({managed: false});
+      probeResponse = response(undefined);
       const malformed = await manager.status();
       assert.strictEqual(malformed.backendTransportReady, false);
       assert.strictEqual(malformed.ready, false);
 
-      probeResponse = {code: -1, message: 'managed backend unavailable'};
+      probeResponse = {code: -1, message: 'source backend unavailable'};
       const failed = await manager.status();
       assert.strictEqual(failed.backendTransportReady, false);
       assert.strictEqual(failed.ready, false);
@@ -405,15 +399,14 @@ describe('ScriptCatManager', () => {
         extensionPath,
         extensionId: EXTENSION_ID,
         repositoryRoot,
-        timeout: 1_000,
+        timeout: 1,
       });
-      await accessManager.initialize();
-      assert.deepStrictEqual(mutations, [
-        {
-          method: 'Extensions.setUserScriptsAccess',
-          params: {id: EXTENSION_ID, enabled: true},
-        },
-      ]);
+      await assert.rejects(accessManager.initialize(), error => {
+        assert.ok(error instanceof ManagedMcpError);
+        assert.strictEqual(error.code, 'TIMEOUT');
+        return true;
+      });
+      assert.deepStrictEqual(mutations, []);
 
       mutations.length = 0;
       extensions = [{...expectedExtension, enabled: false}];

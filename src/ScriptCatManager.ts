@@ -24,6 +24,7 @@ const ACTIONS = {
   get: 'serviceWorker/script/fetchInfo',
   getSource: 'serviceWorker/script/getSource',
   upsert: 'serviceWorker/script/installByCode',
+  setCheckUpdate: 'serviceWorker/script/setCheckUpdateUrl',
   delete: 'serviceWorker/script/deletes',
   setEnabled: 'serviceWorker/script/enable',
 } as const;
@@ -191,13 +192,8 @@ export class ScriptCatManager {
     }
     this.#assertManagedExtension(extension);
 
-    const accessEnabled = await this.#ensureUserScriptsAccess();
-    if (!accessEnabled) {
-      await setExtensionUserScriptsAccess(
-        this.#browser,
-        this.#extensionId,
-        true,
-      );
+    if ((await this.#backend.userScriptsAccessEnabled()) === null) {
+      await this.#startManagedServiceWorker();
     }
     await this.#waitUntilReady();
   }
@@ -349,6 +345,11 @@ export class ScriptCatManager {
       );
     }
 
+    await this.#backend.send(ACTIONS.setCheckUpdate, {
+      uuid: installed.uuid,
+      checkUpdate: false,
+    });
+
     if (options.enabled !== undefined) {
       await this.#backend.send(ACTIONS.setEnabled, {
         uuid: installed.uuid,
@@ -444,15 +445,6 @@ export class ScriptCatManager {
     );
   }
 
-  async #ensureUserScriptsAccess(): Promise<boolean> {
-    const accessEnabled = await this.#backend.userScriptsAccessEnabled();
-    if (accessEnabled !== null) {
-      return accessEnabled;
-    }
-    await this.#startManagedServiceWorker();
-    return await this.#waitForUserScriptsAccess();
-  }
-
   async #startManagedServiceWorker(): Promise<void> {
     try {
       const pageTarget = this.#browser
@@ -476,21 +468,6 @@ export class ScriptCatManager {
         {cause: error},
       );
     }
-  }
-
-  async #waitForUserScriptsAccess(): Promise<boolean> {
-    const deadline = Date.now() + this.#timeout;
-    while (Date.now() < deadline) {
-      const accessEnabled = await this.#backend.userScriptsAccessEnabled();
-      if (accessEnabled !== null) {
-        return accessEnabled;
-      }
-      await delay(100);
-    }
-    throw this.#notReady(
-      'The managed ScriptCat service worker did not become available after startup.',
-      {extensionId: this.#extensionId},
-    );
   }
 
   async #getExtensions(): Promise<RawExtension[]> {

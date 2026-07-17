@@ -8,11 +8,8 @@ import {ManagedMcpError, type ManagedMcpErrorCode} from './ManagedMcpError.js';
 import type {Browser, Page, Target} from './third_party/index.js';
 
 const OFFSCREEN_PATH = '/src/offscreen.html';
-const TRANSPORT_PROBE_ACTION = 'serviceWorker/managed/ping';
-
-interface ManagedTransportProbeResponse {
-  managed: true;
-}
+const TRANSPORT_PROBE_ACTION = 'serviceWorker/script/getSource';
+const TRANSPORT_PROBE_SCRIPT_ID = '__scriptcat_mcp_capability_probe__';
 
 interface ScriptCatMessageResponse<T> {
   code: number;
@@ -38,8 +35,11 @@ export class ScriptCatBackend {
 
   async transportReady(): Promise<boolean> {
     try {
-      const response = await this.send<unknown>(TRANSPORT_PROBE_ACTION);
-      return isManagedTransportProbeResponse(response);
+      const response = await this.send<unknown>(
+        TRANSPORT_PROBE_ACTION,
+        TRANSPORT_PROBE_SCRIPT_ID,
+      );
+      return response === null;
     } catch {
       return false;
     }
@@ -254,16 +254,6 @@ export class ScriptCatBackend {
 
 function remainingTimeout(deadline: number): number {
   return Math.max(1, deadline - Date.now());
-}
-
-function isManagedTransportProbeResponse(
-  response: unknown,
-): response is ManagedTransportProbeResponse {
-  return (
-    typeof response === 'object' &&
-    response !== null &&
-    (response as {managed?: unknown}).managed === true
-  );
 }
 
 function isRetryableTargetError(error: unknown): boolean {
