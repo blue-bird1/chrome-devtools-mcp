@@ -7,15 +7,21 @@
 import assert from 'node:assert';
 import os from 'node:os';
 import path from 'node:path';
-import {describe, it} from 'node:test';
+import {afterEach, describe, it} from 'node:test';
 
 import {executablePath} from 'puppeteer';
+import sinon from 'sinon';
 
 import {detectDisplay, ensureBrowserConnected, launch} from '../src/browser.js';
+import {puppeteer} from '../src/third_party/index.js';
 
 import {serverHooks} from './server.js';
 
 describe('browser', () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
   it('detects display does not crash', () => {
     detectDisplay();
   });
@@ -29,6 +35,7 @@ describe('browser', () => {
       userDataDir: folderPath,
       executablePath: await executablePath(),
       devtools: false,
+      protocolTimeout: 30_000,
     });
     try {
       try {
@@ -38,6 +45,7 @@ describe('browser', () => {
           userDataDir: folderPath,
           executablePath: await executablePath(),
           devtools: false,
+          protocolTimeout: 30_000,
         });
         await browser2.close();
         assert.fail('not reached');
@@ -65,6 +73,7 @@ describe('browser', () => {
         height: 801,
       },
       devtools: false,
+      protocolTimeout: 30_000,
     });
     try {
       const [page] = await browser.pages();
@@ -89,15 +98,39 @@ describe('browser', () => {
       executablePath: await executablePath(),
       devtools: false,
       chromeArgs: ['--remote-debugging-port=0'],
+      protocolTimeout: 30_000,
     });
     try {
+      const connectSpy = sinon.spy(puppeteer, 'connect');
       const connectedBrowser = await ensureBrowserConnected({
         userDataDir: folderPath,
         devtools: false,
+        protocolTimeout: 1_234,
       });
       assert.ok(connectedBrowser);
       assert.ok(connectedBrowser.connected);
+      sinon.assert.calledOnceWithMatch(connectSpy, {
+        protocolTimeout: 1_234,
+      });
       connectedBrowser.disconnect();
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it('passes protocol timeout when launching a browser', async () => {
+    const launchSpy = sinon.spy(puppeteer, 'launch');
+    const browser = await launch({
+      headless: true,
+      isolated: true,
+      executablePath: await executablePath(),
+      devtools: false,
+      protocolTimeout: 1_234,
+    });
+    try {
+      sinon.assert.calledOnceWithMatch(launchSpy, {
+        protocolTimeout: 1_234,
+      });
     } finally {
       await browser.close();
     }
@@ -115,6 +148,7 @@ describe('browser', () => {
         isolated: true,
         executablePath: await executablePath(),
         devtools: false,
+        protocolTimeout: 30_000,
         blocklist: ['*://*:*/blocked.html'],
       });
       try {
@@ -150,6 +184,7 @@ describe('browser', () => {
         isolated: true,
         executablePath: await executablePath(),
         devtools: false,
+        protocolTimeout: 30_000,
         allowlist: ['*://*:*/allowed.html'],
       });
       try {

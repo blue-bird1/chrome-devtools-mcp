@@ -168,6 +168,7 @@ export async function createMcpServer(
               : undefined,
             userDataDir: serverArgs.userDataDir,
             devtools,
+            protocolTimeout: serverArgs.protocolTimeout,
             blocklist,
             allowlist,
           })
@@ -185,6 +186,7 @@ export async function createMcpServer(
             devtools,
             enableExtensions: serverArgs.categoryExtensions,
             viaCli: serverArgs.viaCli,
+            protocolTimeout: serverArgs.protocolTimeout,
             blocklist,
             allowlist,
           });

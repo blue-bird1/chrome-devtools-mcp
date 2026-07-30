@@ -52,6 +52,7 @@ export async function ensureBrowserConnected(options: {
   channel?: Channel;
   userDataDir?: string;
   enableExtensions?: boolean;
+  protocolTimeout: number;
   blocklist?: string[];
   allowlist?: string[];
 }) {
@@ -64,6 +65,7 @@ export async function ensureBrowserConnected(options: {
     targetFilter: makeTargetFilter(enableExtensions),
     defaultViewport: null,
     handleDevToolsAsPage: true,
+    protocolTimeout: options.protocolTimeout,
     blocklist: options.blocklist,
     allowlist: options.allowlist,
   };
@@ -160,6 +162,7 @@ interface McpLaunchOptions {
   devtools: boolean;
   enableExtensions?: boolean;
   viaCli?: boolean;
+  protocolTimeout: number;
   blocklist?: string[];
   allowlist?: string[];
 }
@@ -241,6 +244,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
       enableExtensions: options.enableExtensions,
+      protocolTimeout: options.protocolTimeout,
       blocklist: options.blocklist,
       allowlist: options.allowlist,
     });

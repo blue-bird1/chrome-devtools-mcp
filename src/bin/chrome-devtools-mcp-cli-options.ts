@@ -139,6 +139,18 @@ export const cliOptions = {
       return value;
     },
   },
+  protocolTimeout: {
+    type: 'number',
+    default: 30_000,
+    description:
+      'Maximum time in milliseconds to wait for a Chrome DevTools Protocol response before failing.',
+    coerce: (value: number) => {
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error('protocolTimeout must be a positive integer.');
+      }
+      return value;
+    },
+  },
   channel: {
     type: 'string',
     description:

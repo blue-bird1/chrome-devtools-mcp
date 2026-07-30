@@ -36,6 +36,8 @@ describe('cli args parsing', () => {
     redactNetworkHeaders: false,
     'scriptcat-timeout': 15000,
     scriptcatTimeout: 15000,
+    'protocol-timeout': 30000,
+    protocolTimeout: 30000,
   };
 
   it('parses with default args', async () => {
@@ -64,6 +66,41 @@ describe('cli args parsing', () => {
       browserUrl: 'http://localhost:3000',
       u: 'http://localhost:3000',
     });
+  });
+
+  it('parses a configured protocol timeout', () => {
+    const args = parseArguments(
+      '1.0.0',
+      ['node', 'main.js', '--protocol-timeout=1234'],
+      {},
+    );
+    assert.strictEqual(args.protocolTimeout, 1234);
+  });
+
+  for (const protocolTimeout of ['0', '1.5']) {
+    it(`rejects an invalid protocol timeout: ${protocolTimeout}`, () => {
+      const result = spawnSync(
+        process.execPath,
+        [
+          'build/src/bin/chrome-devtools-mcp.js',
+          `--protocol-timeout=${protocolTimeout}`,
+        ],
+        {encoding: 'utf8'},
+      );
+      assert.strictEqual(result.status, 1);
+      assert.match(result.stderr, /protocolTimeout must be a positive integer/);
+    });
+  }
+
+  it('documents the protocol timeout default in help', () => {
+    const result = spawnSync(
+      process.execPath,
+      ['build/src/bin/chrome-devtools-mcp.js', '--help'],
+      {encoding: 'utf8'},
+    );
+    assert.strictEqual(result.status, 0);
+    assert.match(result.stdout, /--protocolTimeout/);
+    assert.match(result.stdout, /30000/);
   });
 
   it('parses with user data dir', async () => {
