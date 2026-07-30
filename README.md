@@ -588,7 +588,7 @@ The Chrome DevTools MCP server supports the following configuration option:
   - **Default:** `false`
 
 - **`--protocolTimeout`/ `--protocol-timeout`**
-  Maximum time in milliseconds to wait for a Chrome DevTools Protocol response before failing.
+  Maximum time in milliseconds to wait for a Chrome DevTools Protocol response before failing (1 to 2147483647).
   - **Type:** number
   - **Default:** `30000`
 

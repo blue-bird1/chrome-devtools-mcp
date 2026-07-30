@@ -11,6 +11,7 @@ export const MANAGED_SCRIPTCAT_ARGUMENTS_ERROR =
   '--managed-scriptcat-path, --scriptcat-repository-root, and --scriptcat-extension-id must be provided together.';
 export const MANAGED_SCRIPTCAT_PROFILE_ERROR =
   'Managed ScriptCat requires --user-data-dir and an MCP-launched browser; --auto-connect is not supported.';
+const MAX_PROTOCOL_TIMEOUT = 2_147_483_647;
 
 export const cliOptions = {
   autoConnect: {
@@ -143,10 +144,16 @@ export const cliOptions = {
     type: 'number',
     default: 30_000,
     description:
-      'Maximum time in milliseconds to wait for a Chrome DevTools Protocol response before failing.',
+      'Maximum time in milliseconds to wait for a Chrome DevTools Protocol response before failing (1 to 2147483647).',
     coerce: (value: number) => {
-      if (!Number.isInteger(value) || value <= 0) {
-        throw new Error('protocolTimeout must be a positive integer.');
+      if (
+        !Number.isInteger(value) ||
+        value <= 0 ||
+        value > MAX_PROTOCOL_TIMEOUT
+      ) {
+        throw new Error(
+          `protocolTimeout must be an integer between 1 and ${MAX_PROTOCOL_TIMEOUT}.`,
+        );
       }
       return value;
     },

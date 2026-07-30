@@ -77,7 +77,7 @@ describe('cli args parsing', () => {
     assert.strictEqual(args.protocolTimeout, 1234);
   });
 
-  for (const protocolTimeout of ['0', '1.5']) {
+  for (const protocolTimeout of ['0', '1.5', '2147483648']) {
     it(`rejects an invalid protocol timeout: ${protocolTimeout}`, () => {
       const result = spawnSync(
         process.execPath,
@@ -88,7 +88,10 @@ describe('cli args parsing', () => {
         {encoding: 'utf8'},
       );
       assert.strictEqual(result.status, 1);
-      assert.match(result.stderr, /protocolTimeout must be a positive integer/);
+      assert.match(
+        result.stderr,
+        /protocolTimeout must be an integer between 1 and 2147483647/,
+      );
     });
   }
 
